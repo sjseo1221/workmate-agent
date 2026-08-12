@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import unittest
 
 from a2a.server.context import ServerCallContext
@@ -20,6 +21,11 @@ class PostgresPersistenceIntegrationTests(unittest.TestCase):
     """PostgreSQL Migration과 Task·Message 멱등성 경계를 확인한다."""
 
     def test_migration_task_snapshot_and_message_idempotency(self) -> None:
+        # Windows ProactorEventLoop는 psycopg async 연결을 지원하지 않으므로
+        # 실제 PostgreSQL 통합 테스트에서만 SelectorEventLoop를 사용한다.
+        if sys.platform == "win32":
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
         async def scenario() -> None:
             store = PostgresTaskStore(os.environ["DATABASE_URL"])
             context = ServerCallContext()
