@@ -48,7 +48,10 @@ async def verify_a2a_headers(request: Request, call_next):
             return JSONResponse(
                 {"error": "A2A-Version must be 1.0"}, status_code=400
             )
-    return await call_next(request)
+    response = await call_next(request)
+    if request.url.path == "/.well-known/agent-card.json":
+        response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
 
 
 @app.get("/health/live")

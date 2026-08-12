@@ -118,6 +118,12 @@ class PublicA2AContractTests(unittest.TestCase):
             errors = list(validator.iter_errors(data))
             self.assertEqual(errors, [], data["skill_id"])
 
+    def test_agent_card_cache_control_is_public_for_one_hour(self) -> None:
+        response = self.client.get("/.well-known/agent-card.json")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("public", response.headers.get("cache-control", ""))
+        self.assertIn("max-age=3600", response.headers.get("cache-control", ""))
+
     def test_result_envelope_and_runtime_artifact_validate(self) -> None:
         _validator("workmate-skill-schemas.schema.json").validate(_result_envelope())
         response = self.client.post(
