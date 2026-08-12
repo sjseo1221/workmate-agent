@@ -47,7 +47,6 @@ class RuntimeBootTests(unittest.TestCase):
         self.assertIn(("/a2a/message:stream", ("POST",)), paths)
         self.assertIn(("/a2a/tasks/{id}", ("GET", "HEAD")), paths)
         self.assertIn(("/a2a/tasks/{id}:cancel", ("POST",)), paths)
-        self.assertIn(("/a2a/tasks/{id}:subscribe", ("GET", "HEAD")), paths)
         self.assertIn(("/a2a/tasks/{id}:subscribe", ("POST",)), paths)
         self.assertNotIn("/a2a/tasks", {path for path, _ in paths})
         self.assertFalse(any("pushNotification" in path for path, _ in paths))

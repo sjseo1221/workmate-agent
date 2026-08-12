@@ -23,13 +23,12 @@ POST /a2a/message:send
 POST /a2a/message:stream
 GET  /a2a/tasks/{id}
 POST /a2a/tasks/{id}:cancel
-GET  /a2a/tasks/{id}:subscribe
 POST /a2a/tasks/{id}:subscribe
 GET  /health/live
 GET  /health/ready
 ```
 
-Push notification, task list, extended card Route는 자동 공개하지 않습니다. `POST /a2a/tasks/{id}:subscribe`는 SDK가 제공하는 Subscribe의 공식 경로이며, GET 변형도 SDK 호환을 위해 허용합니다.
+Push notification, task list, extended card Route와 SDK 호환용 `GET /a2a/tasks/{id}:subscribe` 변형은 공개하지 않습니다. `POST /a2a/tasks/{id}:subscribe`만 MVP Subscribe 계약으로 허용합니다.
 
 ## 로컬 실행
 

@@ -150,6 +150,67 @@ class PublicA2AContractTests(unittest.TestCase):
         self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
         self.assertIn('"task"', response.text)
 
+    def test_all_five_skills_execute_through_public_route(self) -> None:
+        artifact_validator = _validator("a2a-artifact.schema.json")
+        for data in _skill_inputs():
+            response = self.client.post(
+                "/a2a/message:send",
+                json=_sdk_message(str(data["skill_id"]), data),
+                headers=self.headers,
+            )
+            self.assertEqual(response.status_code, 200, data["skill_id"])
+            task = response.json()["task"]
+            self.assertEqual(task["status"]["state"], "TASK_STATE_COMPLETED")
+            self.assertGreaterEqual(len(task.get("artifacts", [])), 1)
+            for artifact in task["artifacts"]:
+                artifact_validator.validate(artifact)
+
+    def test_authentication_and_version_failures_are_rejected(self) -> None:
+        payload = _sdk_message("daily_briefing", _skill_inputs()[0])
+        missing = self.client.post("/a2a/message:send", json=payload)
+        self.assertEqual(missing.status_code, 401)
+        wrong = self.client.post(
+            "/a2a/message:send",
+            json=payload,
+            headers={**self.headers, "Authorization": "Bearer wrong-token"},
+        )
+        self.assertEqual(wrong.status_code, 401)
+        missing_version = self.client.post(
+            "/a2a/message:send",
+            json=payload,
+            headers={key: value for key, value in self.headers.items() if key != "A2A-Version"},
+        )
+        self.assertEqual(missing_version.status_code, 400)
+
+    def test_stream_contains_task_artifact_and_terminal_events_in_order(self) -> None:
+        response = self.client.post(
+            "/a2a/message:stream",
+            json=_sdk_message("weekly_report", _skill_inputs()[1]),
+            headers={**self.headers, "Accept": "text/event-stream"},
+        )
+        self.assertEqual(response.status_code, 200)
+        task_index = response.text.index('"task"')
+        artifact_index = response.text.index('"artifactUpdate"')
+        completed_index = response.text.rindex('"statusUpdate"')
+        self.assertLess(task_index, artifact_index)
+        self.assertLess(artifact_index, completed_index)
+
+    def test_get_subscribe_is_not_public_and_terminal_post_subscribe_errors(self) -> None:
+        response = self.client.post(
+            "/a2a/message:send",
+            json=_sdk_message("daily_briefing", _skill_inputs()[0]),
+            headers=self.headers,
+        )
+        task_id = response.json()["task"]["id"]
+        get_subscribe = self.client.get(
+            f"/a2a/tasks/{task_id}:subscribe", headers=self.headers
+        )
+        self.assertIn(get_subscribe.status_code, {404, 405})
+        post_subscribe = self.client.post(
+            f"/a2a/tasks/{task_id}:subscribe", headers=self.headers
+        )
+        self.assertIn(post_subscribe.status_code, {400, 409, 422})
+
 
 if __name__ == "__main__":
     unittest.main()

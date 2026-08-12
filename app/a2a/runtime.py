@@ -228,7 +228,6 @@ def _allowed_rest_routes(routes: Iterable[BaseRoute]) -> list[BaseRoute]:
         (f"{A2A_PATH_PREFIX}/message:stream", frozenset({"POST"})),
         (f"{A2A_PATH_PREFIX}/tasks/{{id}}", frozenset({"GET", "HEAD"})),
         (f"{A2A_PATH_PREFIX}/tasks/{{id}}:cancel", frozenset({"POST"})),
-        (f"{A2A_PATH_PREFIX}/tasks/{{id}}:subscribe", frozenset({"GET", "HEAD"})),
         (f"{A2A_PATH_PREFIX}/tasks/{{id}}:subscribe", frozenset({"POST"})),
     }
     return [
@@ -244,8 +243,8 @@ def build_runtime_routes() -> list[BaseRoute]:
 
     Returns:
         A route list containing the public Agent Card route and the approved
-        SDK REST operations. The handler uses in-memory state only until the
-        M0.1 persistence boundary is implemented.
+        SDK REST operations. The handler uses the configured SQLite or
+        PostgreSQL Task Store for durable Task snapshots and idempotency.
     """
 
     card = build_agent_card()
