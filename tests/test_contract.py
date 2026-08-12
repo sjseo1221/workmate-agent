@@ -2,17 +2,33 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
+import tempfile
 import unittest
 
 from fastapi.testclient import TestClient
 from google.protobuf import json_format
 from jsonschema import Draft202012Validator, FormatChecker
 
-from a2a.types import Message, Part, Role
+from a2a.server.context import ServerCallContext
+from a2a.server.events import InMemoryQueueManager
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.types import (
+    Message,
+    Part,
+    Role,
+    SubscribeToTaskRequest,
+    Task,
+    TaskState,
+    TaskStatus,
+)
 from app.main import app
+from app.a2a.persistence import PersistentTaskStore
+from app.a2a.runtime import RuntimeBootstrapExecutor, build_agent_card
+from app.workflows.registry import WorkflowRegistry
 
 
 os.environ.setdefault("WORKMATE_SERVICE_TOKEN", "test-token")
@@ -216,6 +232,36 @@ class PublicA2AContractTests(unittest.TestCase):
             f"/a2a/tasks/{task_id}:subscribe", headers=self.headers
         )
         self.assertIn(post_subscribe.status_code, {400, 409, 422})
+
+    def test_active_subscribe_emits_current_task_snapshot(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as directory:
+                store = PersistentTaskStore(Path(directory) / "a2a.sqlite3")
+                queue_manager = InMemoryQueueManager()
+                handler = DefaultRequestHandler(
+                    agent_executor=RuntimeBootstrapExecutor(
+                        store, WorkflowRegistry()
+                    ),
+                    task_store=store,
+                    agent_card=build_agent_card(),
+                    queue_manager=queue_manager,
+                )
+                context = ServerCallContext()
+                task = Task(
+                    id="active-subscribe-task",
+                    context_id="active-subscribe-context",
+                    status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
+                )
+                await store.save(task, context)
+                await queue_manager.create_or_tap(task.id)
+                events = handler.on_subscribe_to_task(
+                    SubscribeToTaskRequest(id=task.id), context
+                )
+                first = await anext(events)
+                self.assertEqual(first.id, task.id)
+                await events.aclose()
+
+        asyncio.run(scenario())
 
 
 if __name__ == "__main__":
