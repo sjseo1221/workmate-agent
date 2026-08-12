@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
+import sys
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -13,6 +15,13 @@ from app.a2a.runtime import (
     is_a2a_path,
     service_token,
 )
+
+
+# Windows의 기본 ProactorEventLoop는 psycopg async 연결을 지원하지 않는다.
+# 개발 환경에서 DATABASE_URL을 사용할 때도 Docker/Linux와 같은 비동기 계약을
+# 유지하도록 애플리케이션 시작 전에 Selector 정책을 선택한다.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 app = FastAPI(title="Workmate AI Agent", version="0.1.0")
