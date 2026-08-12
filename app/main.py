@@ -22,7 +22,17 @@ for route in build_runtime_routes():
 
 @app.middleware("http")
 async def verify_a2a_headers(request: Request, call_next):
-    """Protect SDK A2A routes with the existing service-token contract."""
+    """Protect SDK A2A routes with the existing service-token contract.
+
+    Returns:
+        The downstream response for valid requests, or a JSON response with
+        status 503, 401, or 400 when configuration, authentication, or the
+        A2A version header is invalid.
+
+    Contract:
+        The Agent Card route remains public. Only the ``/a2a`` route space is
+        protected, and the token value is read from ``WORKMATE_SERVICE_TOKEN``.
+    """
 
     if is_a2a_path(request.url.path):
         token = service_token()
@@ -43,14 +53,23 @@ async def verify_a2a_headers(request: Request, call_next):
 
 @app.get("/health/live")
 def health_live() -> dict[str, str]:
-    """Return liveness without requiring provider credentials."""
+    """Return a liveness response without requiring provider credentials.
+
+    Returns:
+        ``{"status": "alive"}`` when the process can serve requests.
+    """
 
     return {"status": "alive"}
 
 
 @app.get("/health/ready")
 def health_ready() -> dict[str, str]:
-    """Return readiness only when the service token is configured."""
+    """Return readiness only when the service token is configured.
+
+    Returns:
+        ``{"status": "ready"}`` on success; otherwise a 503 response that
+        identifies the missing configuration without exposing the token.
+    """
 
     if not service_token():
         return JSONResponse(

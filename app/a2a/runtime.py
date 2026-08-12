@@ -49,7 +49,13 @@ _SKILLS = (
 
 
 def build_agent_card() -> AgentCard:
-    """Build the SDK Agent Card exposed at the well-known route."""
+    """Build the SDK Agent Card exposed at the well-known route.
+
+    Returns:
+        An SDK ``AgentCard`` declaring the HTTP+JSON 1.0 interface, five
+        approved skills, bearer authentication metadata, and Streaming
+        capability. The card contains no credential value.
+    """
 
     card = AgentCard(
         name="Workmate AI",
@@ -94,7 +100,13 @@ class RuntimeBootstrapExecutor(AgentExecutor):
     """Deterministic SDK executor used until business workflows are connected."""
 
     async def execute(self, context, event_queue: EventQueue) -> None:
-        """Publish a transport-only completion for runtime smoke checks."""
+        """Publish a transport-only completion for runtime smoke checks.
+
+        Contract:
+            The first event is a submitted ``Task``. Status, artifact, and
+            completed events follow in that order. This executor deliberately
+            emits no business Artifact; Workflow integration owns that work.
+        """
 
         timestamp = Timestamp()
         timestamp.FromDatetime(datetime.now(timezone.utc))
@@ -123,14 +135,28 @@ class RuntimeBootstrapExecutor(AgentExecutor):
         await updater.complete()
 
     async def cancel(self, context, event_queue: EventQueue) -> None:
-        """Publish cancellation through the SDK TaskUpdater."""
+        """Publish cancellation through the SDK TaskUpdater.
+
+        Contract:
+            The task is moved to a terminal cancelled state through the SDK
+            event queue, so callers can observe cancellation consistently.
+        """
 
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
         await updater.cancel()
 
 
 def _allowed_rest_routes(routes: Iterable[BaseRoute]) -> list[BaseRoute]:
-    """Keep only the public MVP REST operations from the SDK route factory."""
+    """Keep only the public MVP REST operations from the SDK route factory.
+
+    Args:
+        routes: Routes returned by the official SDK factory.
+
+    Returns:
+        The allowlisted send, stream, task, cancel, and subscribe routes.
+        Push notification, task-list, extended-card, and tenant mounts are
+        intentionally excluded from the public surface.
+    """
 
     allowed = {
         (f"{A2A_PATH_PREFIX}/message:send", frozenset({"POST"})),
@@ -149,7 +175,13 @@ def _allowed_rest_routes(routes: Iterable[BaseRoute]) -> list[BaseRoute]:
 
 
 def build_runtime_routes() -> list[BaseRoute]:
-    """Create the Agent Card and allowlisted SDK REST routes."""
+    """Create the Agent Card and allowlisted SDK REST routes.
+
+    Returns:
+        A route list containing the public Agent Card route and the approved
+        SDK REST operations. The handler uses in-memory state only until the
+        M0.1 persistence boundary is implemented.
+    """
 
     card = build_agent_card()
     handler = DefaultRequestHandler(
@@ -165,13 +197,26 @@ def build_runtime_routes() -> list[BaseRoute]:
 
 
 def is_a2a_path(path: str) -> bool:
-    """Return whether a request targets the protected A2A route space."""
+    """Return whether a request targets the protected A2A route space.
+
+    Args:
+        path: ASGI request path.
+
+    Returns:
+        ``True`` for ``/a2a`` and its descendants; ``False`` for health and
+        Agent Card routes.
+    """
 
     return path == A2A_PATH_PREFIX or path.startswith(f"{A2A_PATH_PREFIX}/")
 
 
 def service_token() -> str:
-    """Read the service token at request time so tests can configure it."""
+    """Read the service token at request time.
+
+    Returns:
+        The configured opaque token, or an empty string when configuration is
+        missing. The value is never included in responses or documentation.
+    """
 
     return os.getenv(SERVICE_TOKEN_ENV, "")
 
