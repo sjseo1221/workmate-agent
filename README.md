@@ -13,6 +13,7 @@ Workmate AI의 공식 `a2a-sdk==1.1.2` HTTP+JSON 런타임입니다. 현재 M0.1
 | A2A 버전 | `1.0` (`A2A-Version` 헤더) |
 | SDK | `a2a-sdk==1.1.2` |
 | Protocol Binding | `HTTP+JSON` |
+| A2A 인프라 저장소 | 운영: PostgreSQL (`DATABASE_URL`), 로컬·Contract Test: SQLite 파일 |
 
 Agent Card는 `GET /.well-known/agent-card.json`에서 공개합니다. Card의 `capabilities.streaming`은 `true`이며, SDK가 생성한 Route 중 MVP allowlist만 등록합니다.
 
@@ -73,10 +74,14 @@ uv run python -m unittest discover -s tests -v
 ## 구현 경계
 
 - `app/main.py`: FastAPI 진입점, health와 인증 미들웨어
-- `app/a2a/runtime.py`: Agent Card, SDK `DefaultRequestHandler`, `AgentExecutor`, Route allowlist
+- `app/a2a/runtime.py`: Agent Card, SDK `DefaultRequestHandler`, `AgentExecutor`, Route allowlist, Store·Registry 연결
+- `app/a2a/persistence.py`: A2A Task·Message 멱등성·Artifact·`task_id ↔ thread_id`·Checkpoint 저장 경계
+- `app/workflows/registry.py`: `skill_id → Workflow` 선택과 전송 독립 요청·결과 타입
+- `migrations/001_a2a_infrastructure.sql`: PostgreSQL 운영용 M0.1 A2A 인프라 Migration
 - `pyproject.toml`, `uv.lock`: 의존성의 단일 원장
 - `tests/test_runtime_boot.py`: M0.1-01 부트스트랩 검증
+- `tests/test_persistence.py`, `tests/test_migration.py`: M0.1-03 영속 경계·Migration 검증
 
-현재 Executor는 업무 Artifact를 생성하지 않고 런타임 연결을 확인하는 최소 응답만 반환합니다. 승인된 Skill·Artifact Schema와 실제 Gmail·Calendar·DB·LLM Workflow는 M0.1-02 이후에 연결하며, 이 단계의 완료를 업무 기능 완료로 해석하지 않습니다.
+현재 Executor는 Registry를 통해 런타임 준비 Workflow를 선택하고 A2A 인프라 Snapshot·멱등성·Checkpoint를 기록합니다. 이 준비 Artifact는 업무 결과가 아니며, 실제 Gmail·Calendar·업무 DB·LLM Workflow는 후속 M1~M4에서 연결합니다. `DATABASE_URL`이 없을 때만 로컬·Contract Test용 SQLite 파일을 사용하고, 운영 Compose는 PostgreSQL URL을 주입해야 합니다.
 
 기존 Legacy `smoke_test.py`는 제거했으며, 공식 SDK 타입과 승인된 Contract Test로 교체했습니다. 실제 업무 Workflow와 Workmate Result 생성은 후속 M0.1-03 이후 범위입니다.

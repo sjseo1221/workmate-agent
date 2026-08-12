@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir uv==0.11.28 \
 ENV PATH="/app/.venv/bin:$PATH"
 
 COPY app ./app
+COPY migrations ./migrations
 
 EXPOSE 8001
 

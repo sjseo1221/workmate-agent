@@ -11,12 +11,13 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from google.protobuf import json_format
 from google.protobuf.timestamp_pb2 import Timestamp
 from a2a.server.agent_execution import AgentExecutor
 from a2a.server.events import EventQueue, InMemoryQueueManager
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_rest_routes
-from a2a.server.tasks import InMemoryTaskStore, TaskUpdater
+from a2a.server.tasks import TaskUpdater
 from a2a.types import (
     AgentCapabilities,
     AgentCard,
@@ -33,10 +34,15 @@ from a2a.types import (
 )
 from starlette.routing import BaseRoute
 
+from app.a2a.persistence import PostgresTaskStore, PersistentTaskStore
+from app.workflows.registry import WorkflowRegistry, WorkflowRequest, WorkflowResult
+
 
 A2A_VERSION = "1.0"
 A2A_PATH_PREFIX = "/a2a"
 SERVICE_TOKEN_ENV = "WORKMATE_SERVICE_TOKEN"
+TASK_DB_PATH_ENV = "WORKMATE_TASK_DB_PATH"
+DATABASE_URL_ENV = "DATABASE_URL"
 BASE_URL = os.getenv(
     "APP_BASE_URL", "http://workmate-agent:8001/a2a"
 ).rstrip("/")
@@ -102,6 +108,12 @@ def build_agent_card() -> AgentCard:
 class RuntimeBootstrapExecutor(AgentExecutor):
     """Deterministic SDK executor used until business workflows are connected."""
 
+    def __init__(
+        self, task_store: PersistentTaskStore | PostgresTaskStore, registry: WorkflowRegistry
+    ) -> None:
+        self.task_store = task_store
+        self.registry = registry
+
     async def execute(self, context, event_queue: EventQueue) -> None:
         """Publish a transport-only completion for runtime smoke checks.
 
@@ -111,39 +123,80 @@ class RuntimeBootstrapExecutor(AgentExecutor):
             emits no business Artifact; Workflow integration owns that work.
         """
 
+        payload = self._payload(context)
+        skill_id = str(payload.get("skill_id", "runtime_bootstrap"))
+        message = context.message
+        message_id = message.message_id if message else f"task-{context.task_id}"
         timestamp = Timestamp()
         timestamp.FromDatetime(datetime.now(timezone.utc))
-        await event_queue.enqueue_event(
-            Task(
-                id=context.task_id,
-                context_id=context.context_id,
-                status=TaskStatus(
-                    state=TaskState.TASK_STATE_SUBMITTED,
-                    timestamp=timestamp,
-                ),
+        submitted = Task(
+            id=context.task_id,
+            context_id=context.context_id,
+            status=TaskStatus(
+                state=TaskState.TASK_STATE_SUBMITTED,
+                timestamp=timestamp,
+            ),
+        )
+        # Message·Checkpoint·Artifact가 FK로 Task Snapshot을 참조하므로
+        # SDK EventQueue보다 먼저 최소 Task를 영속화한다.
+        await self.task_store.save(submitted, context.call_context)
+        await self.task_store.record_message(
+            message_id=message_id,
+            task_id=context.task_id,
+            payload=payload,
+        )
+        await self.task_store.save_checkpoint(
+            thread_id=context.task_id,
+            checkpoint_id=f"{context.task_id}:submitted",
+            state={"skill_id": skill_id, "task_id": context.task_id},
+            metadata={"message_id": message_id, "phase": "submitted"},
+        )
+        await event_queue.enqueue_event(submitted)
+        result = await self.registry.execute(
+            WorkflowRequest(
+                skill_id=skill_id,
+                task_id=context.task_id,
+                thread_id=context.task_id,
+                message_id=message_id,
+                user_id="service",
+                payload=payload,
             )
         )
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
         await updater.start_work()
+        artifact = Artifact(
+            artifact_id=str(uuid4()),
+            name=result.artifact_name,
+            description=result.artifact_description,
+            parts=[
+                Part(
+                    text=result.text,
+                    media_type="text/plain",
+                )
+            ],
+        )
+        await self.task_store.save_artifact(context.task_id, artifact)
         await event_queue.enqueue_event(
             TaskArtifactUpdateEvent(
                 task_id=context.task_id,
                 context_id=context.context_id,
-                artifact=Artifact(
-                    artifact_id=str(uuid4()),
-                    name="runtime_bootstrap",
-                    description="Runtime readiness artifact; no business result.",
-                    parts=[
-                        Part(
-                            text="Workmate A2A runtime is ready for workflow integration.",
-                            media_type="text/plain",
-                        )
-                    ],
-                ),
+                artifact=artifact,
                 last_chunk=True,
             )
         )
         await updater.complete()
+
+    @staticmethod
+    def _payload(context) -> dict[str, object]:
+        """SDK Message의 JSON Part를 Workflow 입력 객체로 변환한다."""
+
+        message = context.message
+        if not message:
+            return {}
+        for part in message.parts:
+            if part.HasField("data"):
+                return dict(json_format.MessageToDict(part.data))
+        return {"text": context.get_user_input()}
 
     async def cancel(self, context, event_queue: EventQueue) -> None:
         """Publish cancellation through the SDK TaskUpdater.
@@ -154,6 +207,7 @@ class RuntimeBootstrapExecutor(AgentExecutor):
         """
 
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
+        await self.task_store.mark_cancel_requested(context.task_id)
         await updater.cancel()
 
 
@@ -195,9 +249,27 @@ def build_runtime_routes() -> list[BaseRoute]:
     """
 
     card = build_agent_card()
+    global _TASK_STORE
+    _TASK_STORE = build_task_store()
+    task_store = _TASK_STORE
+    registry = WorkflowRegistry()
+
+    async def runtime_workflow(request: WorkflowRequest) -> WorkflowResult:
+        """Runtime 골격을 확인하는 비즈니스 독립 Workflow."""
+
+        return WorkflowResult(
+            artifact_name="runtime_bootstrap",
+            artifact_description="Runtime readiness artifact; no business result.",
+            text="Workmate A2A runtime is ready for workflow integration.",
+        )
+
+    for skill_id in (skill[0] for skill in _SKILLS):
+        registry.register(skill_id, runtime_workflow)
+    registry.register("runtime_bootstrap", runtime_workflow)
+
     handler = DefaultRequestHandler(
-        agent_executor=RuntimeBootstrapExecutor(),
-        task_store=InMemoryTaskStore(),
+        agent_executor=RuntimeBootstrapExecutor(task_store, registry),
+        task_store=task_store,
         agent_card=card,
         queue_manager=InMemoryQueueManager(),
     )
@@ -205,6 +277,31 @@ def build_runtime_routes() -> list[BaseRoute]:
         *create_agent_card_routes(card),
         *_allowed_rest_routes(create_rest_routes(handler, path_prefix=A2A_PATH_PREFIX)),
     ]
+
+
+_TASK_STORE: PersistentTaskStore | PostgresTaskStore | None = None
+
+
+def build_task_store() -> PersistentTaskStore | PostgresTaskStore:
+    """환경에 맞는 영속 Task Store를 만든다.
+
+    `DATABASE_URL`이 있으면 PostgreSQL을 사용하고, 없으면 개발·Contract
+    Test용 SQLite 파일을 사용한다. 운영 Compose는 반드시 `DATABASE_URL`을
+    주입해야 한다.
+    """
+
+    database_url = os.getenv(DATABASE_URL_ENV)
+    if database_url:
+        return PostgresTaskStore(database_url)
+    return PersistentTaskStore(os.getenv(TASK_DB_PATH_ENV, ".runtime/a2a.sqlite3"))
+
+
+def task_store() -> PersistentTaskStore | PostgresTaskStore:
+    """현재 Runtime이 사용하는 영속 Task Store를 반환한다."""
+
+    if _TASK_STORE is None:
+        raise RuntimeError("runtime task store has not been initialized")
+    return _TASK_STORE
 
 
 def is_a2a_path(path: str) -> bool:
@@ -237,6 +334,9 @@ __all__ = [
     "A2A_VERSION",
     "BASE_URL",
     "SERVICE_TOKEN_ENV",
+    "TASK_DB_PATH_ENV",
+    "DATABASE_URL_ENV",
+    "build_task_store",
     "build_agent_card",
     "build_runtime_routes",
     "is_a2a_path",
