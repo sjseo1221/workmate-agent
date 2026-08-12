@@ -1,214 +1,82 @@
-# Workmate Agent Shell
+# Workmate AI Agent
 
-오케스트레이터와 Workmate AI 사이의 A2A 통신을 검증하기 위한 Mock Agent입니다. Gmail, Calendar, DB, LLM은 호출하지 않습니다.
+Workmate AI의 공식 `a2a-sdk==1.1.2` HTTP+JSON 런타임입니다. 현재 M0.1-01 범위는 Agent Card, 인증 미들웨어, SDK REST Handler, Streaming·Subscribe Route를 부트스트랩하는 단계이며 Gmail·Calendar·PostgreSQL·LLM Workflow는 이후 마일스톤에서 연결합니다.
 
-## 계약
+## 현재 계약
 
 | 항목 | 값 |
 | --- | --- |
-| Docker 서비스명 | `workmate-agent` |
-| 컨테이너 Port | `8001` |
+| 컨테이너 | `workmate-agent` |
+| 포트 | `8001` |
 | A2A Base URL | `http://workmate-agent:8001/a2a` |
-| 인증 | Bearer Service Token |
-| A2A 버전 | `1.0` |
+| 인증 | `Authorization: Bearer $WORKMATE_SERVICE_TOKEN` |
+| A2A 버전 | `1.0` (`A2A-Version` 헤더) |
+| SDK | `a2a-sdk==1.1.2` |
+| Protocol Binding | `HTTP+JSON` |
 
-지원 Operation:
+Agent Card는 `GET /.well-known/agent-card.json`에서 공개합니다. Card의 `capabilities.streaming`은 `true`이며, SDK가 생성한 Route 중 MVP allowlist만 등록합니다.
 
 ```text
 GET  /.well-known/agent-card.json
 POST /a2a/message:send
-GET  /a2a/tasks/{task_id}
-POST /a2a/tasks/{task_id}:cancel
+POST /a2a/message:stream
+GET  /a2a/tasks/{id}
+POST /a2a/tasks/{id}:cancel
+GET  /a2a/tasks/{id}:subscribe
+POST /a2a/tasks/{id}:subscribe
 GET  /health/live
 GET  /health/ready
 ```
 
-지원 Mock Skill:
+Push notification, task list, extended card Route는 자동 공개하지 않습니다. `POST /a2a/tasks/{id}:subscribe`는 SDK가 제공하는 Subscribe의 공식 경로이며, GET 변형도 SDK 호환을 위해 허용합니다.
 
-```text
-daily_briefing
-weekly_report
-analyze_meeting
-search_meetings
-rank_priorities
-```
-
-## 단독 실행
-
-`.env.example`을 `.env`로 복사하고 Token을 입력합니다.
+## 로컬 실행
 
 ```powershell
-Copy-Item .env.example .env
+$env:WORKMATE_SERVICE_TOKEN = 'local-development-token'
+uv sync --frozen
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8001
 ```
 
+확인:
+
+```powershell
+Invoke-RestMethod http://localhost:8001/health/live
+Invoke-RestMethod http://localhost:8001/.well-known/agent-card.json
+```
+
+## Docker 실행
+
+`.env`에 Secret을 저장할 수 있지만 Git에는 커밋하지 않습니다.
+
 ```env
-WORKMATE_SERVICE_TOKEN=팀에서-합의한-테스트-토큰
+WORKMATE_SERVICE_TOKEN=local-development-token
 APP_BASE_URL=http://workmate-agent:8001/a2a
 ```
 
-실행:
-
 ```powershell
 docker compose up --build -d
 docker compose ps
-```
-
-PC에서 확인:
-
-```text
-http://localhost:8001/.well-known/agent-card.json
-http://localhost:8001/health/ready
-```
-
-종료:
-
-```powershell
 docker compose down
 ```
 
-## Orchestrator Compose에 통합
+## 테스트
 
-두 저장소를 같은 상위 폴더에 clone합니다.
-
-```text
-ai-agent-platform/
-├─ orchestrator/
-│  └─ compose.yaml
-└─ workmate-agent/
-   └─ Dockerfile
-```
-
-오케스트레이터의 `compose.yaml`에 Workmate 서비스를 추가합니다.
-
-```yaml
-services:
-  orchestrator:
-    build: .
-    environment:
-      WORKMATE_AGENT_URL: "http://workmate-agent:8001/a2a"
-      WORKMATE_SERVICE_TOKEN: "${WORKMATE_SERVICE_TOKEN}"
-    depends_on:
-      workmate-agent:
-        condition: service_healthy
-
-  workmate-agent:
-    build:
-      context: ../workmate-agent
-    expose:
-      - "8001"
-    environment:
-      WORKMATE_SERVICE_TOKEN: "${WORKMATE_SERVICE_TOKEN}"
-      APP_BASE_URL: "http://workmate-agent:8001/a2a"
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://localhost:8001/health/ready')"
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 5s
-```
-
-오케스트레이터 저장소의 `.env`에는 두 서비스가 공유할 같은 Token을 설정합니다. `.env`는 GitHub에 올리지 않습니다.
-
-```env
-WORKMATE_SERVICE_TOKEN=팀에서-합의한-테스트-토큰
-```
-
-통합 Compose 실행:
+M0.1-01의 기준 테스트는 Legacy `smoke_test.py`가 아니라 공식 SDK 런타임 테스트입니다.
 
 ```powershell
-docker compose up --build -d
-docker compose ps
-docker compose logs -f orchestrator workmate-agent
+uv run python -m unittest discover -s tests -v
 ```
 
-Compose가 만드는 공통 Network 안에서는 `workmate-agent`가 DNS 호스트명으로 동작합니다. 오케스트레이터 컨테이너에서 `localhost:8001`을 사용하면 안 됩니다.
+테스트는 Agent Card의 HTTP+JSON·Streaming 선언, SDK Route allowlist, Bearer Token·`A2A-Version` 검사, `message:send`의 SDK Task 응답을 확인합니다.
 
-## A2A 호출 예시
+## 구현 경계
 
-요청:
+- `app/main.py`: FastAPI 진입점, health와 인증 미들웨어
+- `app/a2a/runtime.py`: Agent Card, SDK `DefaultRequestHandler`, `AgentExecutor`, Route allowlist
+- `pyproject.toml`, `uv.lock`: 의존성의 단일 원장
+- `tests/test_runtime_boot.py`: M0.1-01 부트스트랩 검증
 
-```http
-POST http://workmate-agent:8001/a2a/message:send
-Authorization: Bearer 팀에서-합의한-테스트-토큰
-A2A-Version: 1.0
-Content-Type: application/a2a+json
-```
+현재 Executor는 업무 Artifact를 생성하지 않고 런타임 연결을 확인하는 최소 응답만 반환합니다. 승인된 Skill·Artifact Schema와 실제 Gmail·Calendar·DB·LLM Workflow는 M0.1-02 이후에 연결하며, 이 단계의 완료를 업무 기능 완료로 해석하지 않습니다.
 
-```json
-{
-  "message": {
-    "messageId": "msg-test-001",
-    "role": "ROLE_USER",
-    "parts": [
-      {
-        "data": {
-          "skill_id": "daily_briefing",
-          "user_id": "user-123",
-          "timezone": "Asia/Seoul",
-          "as_of": "2026-08-05T09:00:00+09:00",
-          "locale": "ko-KR"
-        },
-        "mediaType": "application/json"
-      }
-    ]
-  },
-  "configuration": {
-    "acceptedOutputModes": ["application/json", "text/markdown"]
-  },
-  "metadata": {
-    "request_id": "req-test-001"
-  }
-}
-```
-
-응답의 확인 대상:
-
-```text
-task.status.state = TASK_STATE_COMPLETED
-task.artifacts[].parts[].mediaType = text/markdown 또는 application/json
-result.type = daily_briefing
-result.mock = true
-```
-
-## 문제 확인
-
-```powershell
-docker compose ps
-docker compose logs workmate-agent
-```
-
-| 응답 | 원인 |
-| --- | --- |
-| `400 A2A-Version must be 1.0` | `A2A-Version` Header 누락 또는 불일치 |
-| `400 Unknown skill_id` | 지원하지 않는 Skill 요청 |
-| `401 Invalid service token` | Bearer Token 누락 또는 불일치 |
-| `404 Task not found` | 존재하지 않거나 재시작으로 사라진 Mock Task |
-| `503 Service token is not configured` | Agent 컨테이너에 환경변수 미설정 |
-
-Mock Task는 메모리에만 저장되므로 컨테이너를 재시작하면 사라집니다.
-
-## 통신 테스트
-
-컨테이너가 실행 중인 상태에서 저장소 폴더의 테스트를 실행합니다.
-
-```powershell
-$env:WORKMATE_SERVICE_TOKEN='팀에서-합의한-테스트-토큰'
-python smoke_test.py
-```
-
-다른 Host나 Port를 검사할 때만 URL을 변경합니다.
-
-```powershell
-$env:WORKMATE_TEST_BASE_URL='http://localhost:8001'
-python smoke_test.py
-```
-
-성공 출력:
-
-```text
-PASS: Workmate A2A smoke test (http://localhost:8001, 5 skills)
-```
+기존 `smoke_test.py`는 Legacy Shell 요청 형식을 검사하므로 정식 구현의 기준으로 사용하지 않습니다. 후속 M0.1-02에서 공식 SDK 타입과 승인된 Contract Test로 교체합니다.
