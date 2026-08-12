@@ -62,13 +62,13 @@ docker compose down
 
 ## 테스트
 
-M0.1-01의 기준 테스트는 Legacy `smoke_test.py`가 아니라 공식 SDK 런타임 테스트입니다.
+M0.1-01과 M0.1-02의 기준 테스트는 `tests/` 아래의 공식 SDK 런타임·Contract Test입니다.
 
 ```powershell
 uv run python -m unittest discover -s tests -v
 ```
 
-테스트는 Agent Card의 HTTP+JSON·Streaming 선언, SDK Route allowlist, Bearer Token·`A2A-Version` 검사, `message:send`의 SDK Task 응답을 확인합니다.
+테스트는 Agent Card의 HTTP+JSON·Streaming 선언, SDK Route allowlist, Bearer Token·`A2A-Version` 검사, SDK Message 직렬화, 승인된 Skill·Artifact Schema 검증, `message:send`·Streaming 응답을 확인합니다. Schema는 Superproject의 `docs/schemas/`를 자동 탐색하며, 별도 checkout에서는 `WORKMATE_SCHEMA_ROOT`로 지정합니다.
 
 ## 구현 경계
 
@@ -79,4 +79,4 @@ uv run python -m unittest discover -s tests -v
 
 현재 Executor는 업무 Artifact를 생성하지 않고 런타임 연결을 확인하는 최소 응답만 반환합니다. 승인된 Skill·Artifact Schema와 실제 Gmail·Calendar·DB·LLM Workflow는 M0.1-02 이후에 연결하며, 이 단계의 완료를 업무 기능 완료로 해석하지 않습니다.
 
-기존 `smoke_test.py`는 Legacy Shell 요청 형식을 검사하므로 정식 구현의 기준으로 사용하지 않습니다. 후속 M0.1-02에서 공식 SDK 타입과 승인된 Contract Test로 교체합니다.
+기존 Legacy `smoke_test.py`는 제거했으며, 공식 SDK 타입과 승인된 Contract Test로 교체했습니다. 실제 업무 Workflow와 Workmate Result 생성은 후속 M0.1-03 이후 범위입니다.

@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from google.protobuf.timestamp_pb2 import Timestamp
 from a2a.server.agent_execution import AgentExecutor
@@ -22,9 +23,11 @@ from a2a.types import (
     AgentInterface,
     AgentProvider,
     AgentSkill,
+    Artifact,
     HTTPAuthSecurityScheme,
     Part,
     Task,
+    TaskArtifactUpdateEvent,
     TaskState,
     TaskStatus,
 )
@@ -122,15 +125,23 @@ class RuntimeBootstrapExecutor(AgentExecutor):
         )
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
         await updater.start_work()
-        await updater.add_artifact(
-            [
-                Part(
-                    text="Workmate A2A runtime is ready for workflow integration.",
-                    media_type="text/plain",
-                )
-            ],
-            name="runtime_bootstrap",
-            last_chunk=True,
+        await event_queue.enqueue_event(
+            TaskArtifactUpdateEvent(
+                task_id=context.task_id,
+                context_id=context.context_id,
+                artifact=Artifact(
+                    artifact_id=str(uuid4()),
+                    name="runtime_bootstrap",
+                    description="Runtime readiness artifact; no business result.",
+                    parts=[
+                        Part(
+                            text="Workmate A2A runtime is ready for workflow integration.",
+                            media_type="text/plain",
+                        )
+                    ],
+                ),
+                last_chunk=True,
+            )
         )
         await updater.complete()
 
