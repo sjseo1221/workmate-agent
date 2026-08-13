@@ -121,6 +121,8 @@ class InternalChatInputTests(unittest.TestCase):
         task = self.client.get(f"/api/v1/internal/skill-chat/tasks/{task_id}")
         self.assertEqual(task.status_code, 200)
         self.assertEqual(task.json()["status"]["state"], "TASK_STATE_COMPLETED")
+        self.assertTrue(task.json()["artifacts"][0]["metadata"]["mock"])
+        self.assertFalse(task.json()["artifacts"][0]["metadata"]["business_result"])
         cancel = self.client.post(f"/api/v1/internal/skill-chat/tasks/{task_id}:cancel")
         self.assertEqual(cancel.status_code, 409)
 

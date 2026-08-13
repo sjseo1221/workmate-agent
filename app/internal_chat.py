@@ -167,6 +167,7 @@ async def _persist_task(
         artifact_id=f"artifact-{task_id}",
         name=result.artifact_name,
         description=result.artifact_description,
+        metadata={"mock": result.mock, "business_result": not result.mock},
         parts=[Part(text=result.text, media_type="text/plain")],
     )
     task.artifacts.append(artifact)

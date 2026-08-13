@@ -36,6 +36,7 @@ class InternalChatUiTests(unittest.TestCase):
         self.assertIn("/api/v1/internal/skill-chat/tasks/", response.text)
         self.assertIn(":cancel", response.text)
         self.assertIn("setInterval(refreshTask,1000)", response.text)
+        self.assertIn("a.metadata||a", response.text)
         self.assertIn("token.addEventListener('input'", response.text)
         self.assertIn("Token 입력 후 Skill 목록을 불러오세요", response.text)
 
