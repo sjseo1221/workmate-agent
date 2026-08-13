@@ -41,6 +41,8 @@ class InternalChatInputTests(unittest.TestCase):
         )
         self.assertEqual(natural.status_code, 200)
         self.assertEqual(natural.json()["input_type"], "natural_language")
+        self.assertEqual(natural.json()["state"], "completed")
+        self.assertEqual(natural.json()["artifact"]["name"], "runtime_bootstrap")
 
         structured = self.client.post(
             "/api/v1/internal/skill-chat/messages",
@@ -55,6 +57,7 @@ class InternalChatInputTests(unittest.TestCase):
         )
         self.assertEqual(structured.status_code, 200)
         self.assertEqual(structured.json()["input_type"], "json")
+        self.assertTrue(structured.json()["task_id"])
 
     def test_rejects_unknown_skill_blank_input_and_mismatched_json_skill(self) -> None:
         unknown = self.client.post(

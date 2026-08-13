@@ -265,6 +265,7 @@ def build_runtime_routes() -> list[BaseRoute]:
     global _TASK_STORE
     _TASK_STORE = build_task_store()
     task_store = _TASK_STORE
+    global _WORKFLOW_REGISTRY
     registry = WorkflowRegistry()
 
     async def runtime_workflow(request: WorkflowRequest) -> WorkflowResult:
@@ -279,6 +280,7 @@ def build_runtime_routes() -> list[BaseRoute]:
     for skill_id in (skill[0] for skill in _SKILLS):
         registry.register(skill_id, runtime_workflow)
     registry.register("runtime_bootstrap", runtime_workflow)
+    _WORKFLOW_REGISTRY = registry
 
     handler = DefaultRequestHandler(
         agent_executor=RuntimeBootstrapExecutor(task_store, registry),
@@ -293,6 +295,7 @@ def build_runtime_routes() -> list[BaseRoute]:
 
 
 _TASK_STORE: PersistentTaskStore | PostgresTaskStore | None = None
+_WORKFLOW_REGISTRY: WorkflowRegistry | None = None
 
 
 def build_task_store() -> PersistentTaskStore | PostgresTaskStore:
@@ -315,6 +318,14 @@ def task_store() -> PersistentTaskStore | PostgresTaskStore:
     if _TASK_STORE is None:
         raise RuntimeError("runtime task store has not been initialized")
     return _TASK_STORE
+
+
+def workflow_registry() -> WorkflowRegistry:
+    """현재 A2A와 내부 검증 API가 공유하는 Workflow Registry를 반환한다."""
+
+    if _WORKFLOW_REGISTRY is None:
+        raise RuntimeError("workflow registry has not been initialized")
+    return _WORKFLOW_REGISTRY
 
 
 def is_a2a_path(path: str) -> bool:
@@ -354,4 +365,5 @@ __all__ = [
     "build_runtime_routes",
     "is_a2a_path",
     "service_token",
+    "workflow_registry",
 ]

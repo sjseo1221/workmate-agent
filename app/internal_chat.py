@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.a2a.runtime import approved_skill_definitions
+from app.a2a.runtime import approved_skill_definitions, workflow_registry
+from app.workflows.registry import WorkflowRequest
 
 
 INTERNAL_CHAT_ENABLED_ENV = "WORKMATE_INTERNAL_CHAT_ENABLED"
@@ -50,14 +52,18 @@ class SkillChatMessageRequest(BaseModel):
 class SkillChatMessageResponse(BaseModel):
     """입력 검증 결과를 반환한다.
 
-    실제 업무 Artifact와 Task 상태는 M0.3-02·03에서 같은 Workflow 경계에
-    연결한다. 따라서 현재 응답은 검증 성공 여부와 정규화된 입력만 담는다.
+    실제 업무 Artifact의 상세 Schema와 장기 Task 상태는 후속 백로그에서
+    보강하며, 이번 응답은 공유 Workflow의 실행 결과를 담는다.
     """
 
     skill_id: str
     input_type: str
     input: str | dict[str, Any]
     validation: str = "valid"
+    task_id: str
+    state: str
+    artifact: dict[str, Any]
+    warnings: list[dict[str, Any]] = Field(default_factory=list)
 
 
 router = APIRouter(prefix="/api/v1/internal/skill-chat", tags=["internal-skill-chat"])
@@ -73,8 +79,8 @@ def list_skills() -> list[dict[str, str]]:
 
 
 @router.post("/messages", response_model=SkillChatMessageResponse)
-def validate_message(request: SkillChatMessageRequest) -> SkillChatMessageResponse:
-    """Skill 존재 여부와 자연어·JSON 입력 형식을 검증한다."""
+async def validate_message(request: SkillChatMessageRequest) -> SkillChatMessageResponse:
+    """입력을 검증하고 A2A와 공유하는 Workflow Registry를 호출한다."""
 
     if not _enabled():
         raise HTTPException(status_code=404, detail="internal chat is disabled")
@@ -82,10 +88,30 @@ def validate_message(request: SkillChatMessageRequest) -> SkillChatMessageRespon
     if request.skill_id not in known_skills:
         raise HTTPException(status_code=422, detail="unknown skill_id")
     input_type = "natural_language" if isinstance(request.input, str) else "json"
+    payload = {"text": request.input} if isinstance(request.input, str) else request.input
+    task_id = str(uuid4())
+    result = await workflow_registry().execute(
+        WorkflowRequest(
+            skill_id=request.skill_id,
+            task_id=task_id,
+            thread_id=task_id,
+            message_id=f"internal-{task_id}",
+            user_id=str(payload.get("user_id", "internal-chat")),
+            payload=payload,
+        )
+    )
     return SkillChatMessageResponse(
         skill_id=request.skill_id,
         input_type=input_type,
         input=request.input,
+        task_id=task_id,
+        state=result.state,
+        artifact={
+            "name": result.artifact_name,
+            "description": result.artifact_description,
+            "text": result.text,
+        },
+        warnings=result.warnings,
     )
 
 
