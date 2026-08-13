@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, patch
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
+from a2a.server.context import ServerCallContext
+from a2a.types import Task, TaskState, TaskStatus
 from jwt.algorithms import RSAAlgorithm
 from fastapi.testclient import TestClient
 
@@ -210,6 +212,29 @@ class InternalChatInputTests(unittest.TestCase):
             self.client.get(f"/api/v1/internal/skill-chat/tasks/{task_id}").status_code,
             404,
         )
+
+    def test_cancel_endpoint_marks_working_fixture_cancelled(self) -> None:
+        class WorkingTaskFixture:
+            def __init__(self) -> None:
+                self.task = Task(
+                    id="working-fixture",
+                    context_id="working-fixture",
+                    status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
+                )
+
+            async def get(self, task_id: str, context: ServerCallContext) -> Task | None:
+                return self.task if task_id == self.task.id else None
+
+            async def mark_cancel_requested(self, task_id: str) -> None:
+                self.task.status.state = TaskState.TASK_STATE_CANCELED
+
+        fixture = WorkingTaskFixture()
+        with patch("app.internal_chat.task_store", return_value=fixture):
+            response = self.client.post(
+                "/api/v1/internal/skill-chat/tasks/working-fixture:cancel"
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"]["state"], "TASK_STATE_CANCELED")
 
     def test_preserves_partial_failure_warnings(self) -> None:
         result = WorkflowResult(
