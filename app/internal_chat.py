@@ -239,6 +239,8 @@ async def validate_message(
             "name": result.artifact_name,
             "description": result.artifact_description,
             "text": result.text,
+            "mock": result.mock,
+            "business_result": not result.mock,
         },
         warnings=result.warnings,
     )

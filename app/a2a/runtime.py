@@ -275,6 +275,7 @@ def build_runtime_routes() -> list[BaseRoute]:
             artifact_name="runtime_bootstrap",
             artifact_description="Runtime readiness artifact; no business result.",
             text="Workmate A2A runtime is ready for workflow integration.",
+            mock=True,
         )
 
     for skill_id in (skill[0] for skill in _SKILLS):

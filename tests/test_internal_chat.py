@@ -115,6 +115,8 @@ class InternalChatInputTests(unittest.TestCase):
         self.assertEqual(natural.status_code, 200)
         self.assertEqual(natural.json()["input_type"], "natural_language")
         self.assertEqual(natural.json()["state"], "completed")
+        self.assertTrue(natural.json()["artifact"]["mock"])
+        self.assertFalse(natural.json()["artifact"]["business_result"])
         task_id = natural.json()["task_id"]
         task = self.client.get(f"/api/v1/internal/skill-chat/tasks/{task_id}")
         self.assertEqual(task.status_code, 200)

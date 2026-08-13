@@ -46,6 +46,7 @@ class WorkflowResult:
     text: str
     state: str = "completed"
     warnings: list[dict[str, object]] = field(default_factory=list)
+    mock: bool = False
 
 
 WorkflowHandler = Callable[[WorkflowRequest], Awaitable[WorkflowResult]]
@@ -87,4 +88,3 @@ class WorkflowRegistry:
         """Registry를 통해 Workflow를 실행한다."""
 
         return await self.resolve(request.skill_id)(request)
-
