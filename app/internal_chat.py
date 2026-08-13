@@ -11,9 +11,12 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
+from a2a.server.context import ServerCallContext
+from a2a.types import Artifact, Part, Task, TaskState, TaskStatus
+from google.protobuf import json_format
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.a2a.runtime import approved_skill_definitions, workflow_registry
+from app.a2a.runtime import approved_skill_definitions, task_store, workflow_registry
 from app.workflows.registry import WorkflowRequest
 
 
@@ -66,6 +69,45 @@ class SkillChatMessageResponse(BaseModel):
     warnings: list[dict[str, Any]] = Field(default_factory=list)
 
 
+_TERMINAL_STATES = {
+    TaskState.TASK_STATE_COMPLETED,
+    TaskState.TASK_STATE_FAILED,
+    TaskState.TASK_STATE_CANCELED,
+    TaskState.TASK_STATE_REJECTED,
+}
+
+
+async def _persist_task(
+    task_id: str,
+    request: SkillChatMessageRequest,
+    result: Any,
+) -> Task:
+    """Workflow 결과를 기존 A2A Task Store에 Snapshot으로 저장한다."""
+
+    task = Task(
+        id=task_id,
+        context_id=task_id,
+        status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
+    )
+    artifact = Artifact(
+        artifact_id=f"artifact-{task_id}",
+        name=result.artifact_name,
+        description=result.artifact_description,
+        parts=[Part(text=result.text, media_type="text/plain")],
+    )
+    task.artifacts.append(artifact)
+    context = ServerCallContext()
+    await task_store().save(task, context)
+    await task_store().record_message(
+        message_id=f"internal-{task_id}",
+        task_id=task_id,
+        payload={"skill_id": request.skill_id, "input": request.input},
+        response=task,
+    )
+    await task_store().save_artifact(task_id, artifact)
+    return task
+
+
 router = APIRouter(prefix="/api/v1/internal/skill-chat", tags=["internal-skill-chat"])
 
 
@@ -100,6 +142,7 @@ async def validate_message(request: SkillChatMessageRequest) -> SkillChatMessage
             payload=payload,
         )
     )
+    await _persist_task(task_id, request, result)
     return SkillChatMessageResponse(
         skill_id=request.skill_id,
         input_type=input_type,
@@ -113,6 +156,30 @@ async def validate_message(request: SkillChatMessageRequest) -> SkillChatMessage
         },
         warnings=result.warnings,
     )
+
+
+@router.get("/tasks/{task_id}")
+async def get_task(task_id: str) -> dict[str, Any]:
+    """영속 Task Snapshot을 조회해 내부 검증 API의 Polling 결과로 반환한다."""
+
+    task = await task_store().get(task_id, ServerCallContext())
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return json_format.MessageToDict(task, preserving_proto_field_name=False)
+
+
+@router.post("/tasks/{task_id}:cancel")
+async def cancel_task(task_id: str) -> dict[str, Any]:
+    """진행 중 Task의 취소를 기록하고 Terminal Task 취소는 거부한다."""
+
+    task = await task_store().get(task_id, ServerCallContext())
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    if task.status.state in _TERMINAL_STATES:
+        raise HTTPException(status_code=409, detail="task is already terminal")
+    await task_store().mark_cancel_requested(task_id)
+    cancelled = await task_store().get(task_id, ServerCallContext())
+    return json_format.MessageToDict(cancelled, preserving_proto_field_name=False)
 
 
 __all__ = [

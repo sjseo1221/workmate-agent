@@ -43,6 +43,14 @@ class InternalChatInputTests(unittest.TestCase):
         self.assertEqual(natural.json()["input_type"], "natural_language")
         self.assertEqual(natural.json()["state"], "completed")
         self.assertEqual(natural.json()["artifact"]["name"], "runtime_bootstrap")
+        task_id = natural.json()["task_id"]
+        task = self.client.get(f"/api/v1/internal/skill-chat/tasks/{task_id}")
+        self.assertEqual(task.status_code, 200)
+        self.assertEqual(task.json()["status"]["state"], "TASK_STATE_COMPLETED")
+        cancel = self.client.post(
+            f"/api/v1/internal/skill-chat/tasks/{task_id}:cancel"
+        )
+        self.assertEqual(cancel.status_code, 409)
 
         structured = self.client.post(
             "/api/v1/internal/skill-chat/messages",
@@ -84,6 +92,10 @@ class InternalChatInputTests(unittest.TestCase):
     def test_disabled_api_is_not_available(self) -> None:
         os.environ.pop("WORKMATE_INTERNAL_CHAT_ENABLED", None)
         response = self.client.get("/api/v1/internal/skill-chat/skills")
+        self.assertEqual(response.status_code, 404)
+
+    def test_unknown_task_is_not_exposed(self) -> None:
+        response = self.client.get("/api/v1/internal/skill-chat/tasks/missing")
         self.assertEqual(response.status_code, 404)
 
 
