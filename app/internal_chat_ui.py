@@ -1,0 +1,43 @@
+"""내부 검증 챗봇의 최소 입력 화면."""
+
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import HTMLResponse
+
+from app.internal_chat import INTERNAL_CHAT_ENABLED_ENV
+import os
+
+
+router = APIRouter(tags=["internal-skill-chat-ui"])
+
+_PAGE = """<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Workmate Skill 검증</title>
+<style>body{font-family:system-ui,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem}label{display:block;margin:.8rem 0 .25rem}input,select,textarea,button{box-sizing:border-box;width:100%;padding:.6rem;font:inherit}textarea{min-height:9rem;font-family:monospace}button{margin-top:1rem;cursor:pointer}pre{white-space:pre-wrap;background:#f4f4f4;padding:1rem;min-height:4rem}</style>
+</head>
+<body><h1>Workmate Skill 검증</h1>
+<p>입력한 Bearer Token은 저장하지 않고 현재 브라우저 요청에만 사용합니다.</p>
+<label for="token">OIDC Bearer Token</label><input id="token" type="password" autocomplete="off">
+<label for="skill">Skill</label><select id="skill"></select>
+<label for="mode">입력 형식</label><select id="mode"><option value="text">자연어</option><option value="json">JSON</option></select>
+<label for="input">입력</label><textarea id="input" placeholder="질문 또는 승인된 Skill JSON"></textarea>
+<button id="send" type="button">실행</button><pre id="result" aria-live="polite"></pre>
+<script>
+const token=document.querySelector('#token'), skill=document.querySelector('#skill'), mode=document.querySelector('#mode'), input=document.querySelector('#input'), result=document.querySelector('#result');
+const headers=()=>({Authorization:`Bearer ${token.value}`,'Content-Type':'application/json'});
+async function loadSkills(){const r=await fetch('/api/v1/internal/skill-chat/skills',{headers:headers()}); if(!r.ok){result.textContent=`Skill 목록 오류: HTTP ${r.status}`;return} skill.replaceChildren(...(await r.json()).map(s=>new Option(`${s.id} — ${s.name}`,s.id)));}
+document.querySelector('#send').onclick=async()=>{let value=input.value; if(mode.value==='json'){try{value=JSON.parse(value)}catch(e){result.textContent='JSON 형식이 올바르지 않습니다.';return}} const r=await fetch('/api/v1/internal/skill-chat/messages',{method:'POST',headers:headers(),body:JSON.stringify({skill_id:skill.value,input:value})}); result.textContent=await r.text()};
+loadSkills();
+</script></body></html>"""
+
+
+@router.get("/internal/skill-chat", response_class=HTMLResponse)
+def internal_chat_page() -> HTMLResponse:
+    """내부 검증 UI를 반환하고 비활성 환경에서는 진입을 차단한다."""
+
+    if os.getenv(INTERNAL_CHAT_ENABLED_ENV, "").lower() != "true":
+        raise HTTPException(status_code=404, detail="internal chat is disabled")
+    return HTMLResponse(_PAGE)
+
+
+__all__ = ["router"]

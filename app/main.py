@@ -16,6 +16,7 @@ from app.a2a.runtime import (
     service_token,
 )
 from app.internal_chat import router as internal_chat_router
+from app.internal_chat_ui import router as internal_chat_ui_router
 
 
 # Windows의 기본 ProactorEventLoop는 psycopg async 연결을 지원하지 않는다.
@@ -29,6 +30,7 @@ app = FastAPI(title="Workmate AI Agent", version="0.1.0")
 for route in build_runtime_routes():
     app.router.routes.append(route)
 app.include_router(internal_chat_router)
+app.include_router(internal_chat_ui_router)
 
 
 @app.middleware("http")
