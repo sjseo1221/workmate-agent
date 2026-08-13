@@ -27,8 +27,6 @@ from app.workflows.registry import WorkflowRequest
 
 
 INTERNAL_CHAT_ENABLED_ENV = "WORKMATE_INTERNAL_CHAT_ENABLED"
-INTERNAL_CHAT_DEV_AUTH_ENV = "WORKMATE_INTERNAL_CHAT_DEV_AUTH"
-INTERNAL_CHAT_DEV_USER_ENV = "WORKMATE_INTERNAL_CHAT_DEV_USER_ID"
 OIDC_ISSUER_ENV = "WORKMATE_OIDC_ISSUER"
 OIDC_AUDIENCE_ENV = "WORKMATE_OIDC_AUDIENCE"
 OIDC_JWKS_URL_ENV = "WORKMATE_OIDC_JWKS_URL"
@@ -57,12 +55,6 @@ def _schema_validator() -> Draft202012Validator:
 
 def _authenticated_user(request: Request) -> str:
     """OIDC JWT의 `sub`를 내부 API의 사용자 범위로 반환한다."""
-
-    if os.getenv(INTERNAL_CHAT_DEV_AUTH_ENV, "").lower() == "true":
-        user_id = os.getenv(INTERNAL_CHAT_DEV_USER_ENV, "")
-        if user_id:
-            return user_id
-        raise HTTPException(status_code=503, detail="dev auth user is not configured")
 
     authorization = request.headers.get("authorization", "")
     scheme, _, token = authorization.partition(" ")
