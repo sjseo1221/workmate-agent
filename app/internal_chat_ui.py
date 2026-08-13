@@ -18,15 +18,16 @@ _PAGE = """<!doctype html>
 <body><h1>Workmate Skill 검증</h1>
 <p>입력한 Bearer Token은 저장하지 않고 현재 브라우저 요청에만 사용합니다.</p>
 <label for="token">OIDC Bearer Token</label><input id="token" type="password" autocomplete="off">
-<label for="skill">Skill</label><select id="skill"></select>
+<label for="skill">Skill</label><select id="skill"><option value="">Token 입력 후 Skill 목록을 불러오세요</option></select>
 <label for="mode">입력 형식</label><select id="mode"><option value="text">자연어</option><option value="json">JSON</option></select>
 <label for="input">입력</label><textarea id="input" placeholder="질문 또는 승인된 Skill JSON"></textarea>
 <button id="send" type="button">실행</button><pre id="result" aria-live="polite"></pre>
 <script>
 const token=document.querySelector('#token'), skill=document.querySelector('#skill'), mode=document.querySelector('#mode'), input=document.querySelector('#input'), result=document.querySelector('#result');
 const headers=()=>({Authorization:`Bearer ${token.value}`,'Content-Type':'application/json'});
-async function loadSkills(){const r=await fetch('/api/v1/internal/skill-chat/skills',{headers:headers()}); if(!r.ok){result.textContent=`Skill 목록 오류: HTTP ${r.status}`;return} skill.replaceChildren(...(await r.json()).map(s=>new Option(`${s.id} — ${s.name}`,s.id)));}
-document.querySelector('#send').onclick=async()=>{let value=input.value; if(mode.value==='json'){try{value=JSON.parse(value)}catch(e){result.textContent='JSON 형식이 올바르지 않습니다.';return}} const r=await fetch('/api/v1/internal/skill-chat/messages',{method:'POST',headers:headers(),body:JSON.stringify({skill_id:skill.value,input:value})}); result.textContent=await r.text()};
+async function loadSkills(){if(!token.value.trim()){skill.replaceChildren(new Option('Token 입력 후 Skill 목록을 불러오세요',''));return false} const r=await fetch('/api/v1/internal/skill-chat/skills',{headers:headers()}); if(!r.ok){skill.replaceChildren(new Option(`Skill 목록 오류: HTTP ${r.status}`,''));result.textContent=`Skill 목록 오류: HTTP ${r.status}`;return false} skill.replaceChildren(...(await r.json()).map(s=>new Option(`${s.id} — ${s.name}`,s.id)));return true;}
+token.addEventListener('input',()=>{loadSkills()});
+document.querySelector('#send').onclick=async()=>{if(!skill.value&&!await loadSkills()){return} let value=input.value; if(mode.value==='json'){try{value=JSON.parse(value)}catch(e){result.textContent='JSON 형식이 올바르지 않습니다.';return}} if(typeof value==='string'&&!value.trim()){result.textContent='입력을 입력해 주세요.';return} const r=await fetch('/api/v1/internal/skill-chat/messages',{method:'POST',headers:headers(),body:JSON.stringify({skill_id:skill.value,input:value})}); result.textContent=await r.text()};
 loadSkills();
 </script></body></html>"""
 

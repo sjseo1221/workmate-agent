@@ -28,6 +28,8 @@ class InternalChatUiTests(unittest.TestCase):
         self.assertIn('id="mode"', response.text)
         self.assertIn('id="input"', response.text)
         self.assertIn("/api/v1/internal/skill-chat/messages", response.text)
+        self.assertIn("token.addEventListener('input'", response.text)
+        self.assertIn("Token 입력 후 Skill 목록을 불러오세요", response.text)
 
     def test_page_is_hidden_when_internal_chat_is_disabled(self) -> None:
         response = self.client.get("/internal/skill-chat")
