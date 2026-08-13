@@ -7,13 +7,19 @@ Task 조회, Session/OIDC 인증은 후속 M0.3 백로그에서 이 경계에 �
 from __future__ import annotations
 
 import os
+import json
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from a2a.server.context import ServerCallContext
+from a2a.auth.user import User
 from a2a.types import Artifact, Part, Task, TaskState, TaskStatus
 from google.protobuf import json_format
+from jsonschema import Draft202012Validator, FormatChecker
+import jwt
+from jwt import PyJWKClient
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.a2a.runtime import approved_skill_definitions, task_store, workflow_registry
@@ -21,12 +27,87 @@ from app.workflows.registry import WorkflowRequest
 
 
 INTERNAL_CHAT_ENABLED_ENV = "WORKMATE_INTERNAL_CHAT_ENABLED"
+INTERNAL_CHAT_DEV_AUTH_ENV = "WORKMATE_INTERNAL_CHAT_DEV_AUTH"
+INTERNAL_CHAT_DEV_USER_ENV = "WORKMATE_INTERNAL_CHAT_DEV_USER_ID"
+OIDC_ISSUER_ENV = "WORKMATE_OIDC_ISSUER"
+OIDC_AUDIENCE_ENV = "WORKMATE_OIDC_AUDIENCE"
+OIDC_JWKS_URL_ENV = "WORKMATE_OIDC_JWKS_URL"
+SCHEMA_ROOT_ENV = "WORKMATE_SCHEMA_ROOT"
 
 
 def _enabled() -> bool:
     """내부 검증 API 활성화 여부를 환경변수에서 읽는다."""
 
     return os.getenv(INTERNAL_CHAT_ENABLED_ENV, "").lower() == "true"
+
+
+def _schema_validator() -> Draft202012Validator:
+    """승인된 Workmate Skill Schema를 로드한다."""
+
+    configured = os.getenv(SCHEMA_ROOT_ENV)
+    root = Path(configured) if configured else Path(__file__).resolve().parents[2] / "docs" / "schemas"
+    schema_path = root / "workmate-skill-schemas.schema.json"
+    if not schema_path.is_file():
+        raise HTTPException(status_code=503, detail="approved skill schema is unavailable")
+    return Draft202012Validator(
+        json.loads(schema_path.read_text(encoding="utf-8")),
+        format_checker=FormatChecker(),
+    )
+
+
+def _authenticated_user(request: Request) -> str:
+    """OIDC JWT의 `sub`를 내부 API의 사용자 범위로 반환한다."""
+
+    if os.getenv(INTERNAL_CHAT_DEV_AUTH_ENV, "").lower() == "true":
+        user_id = os.getenv(INTERNAL_CHAT_DEV_USER_ENV, "")
+        if user_id:
+            return user_id
+        raise HTTPException(status_code=503, detail="dev auth user is not configured")
+
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=401, detail="OIDC bearer token is required")
+    issuer = os.getenv(OIDC_ISSUER_ENV, "")
+    audience = os.getenv(OIDC_AUDIENCE_ENV, "")
+    jwks_url = os.getenv(OIDC_JWKS_URL_ENV, "")
+    if not issuer or not audience or not jwks_url:
+        raise HTTPException(status_code=503, detail="OIDC validation is not configured")
+    try:
+        signing_key = PyJWKClient(jwks_url).get_signing_key_from_jwt(token)
+        claims = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256", "ES256"],
+            audience=audience,
+            issuer=issuer,
+            options={"require": ["exp", "sub", "iss", "aud"]},
+        )
+    except jwt.PyJWTError as exc:
+        raise HTTPException(status_code=401, detail="invalid OIDC bearer token") from exc
+    user_id = claims.get("sub")
+    if not isinstance(user_id, str) or not user_id:
+        raise HTTPException(status_code=401, detail="OIDC subject is missing")
+    return user_id
+
+
+class _InternalUser(User):
+    """내부 API에서 영속 Task Store의 소유자 범위를 표현하는 사용자다."""
+
+    def __init__(self, user_id: str) -> None:
+        self._user_id = user_id
+
+    @property
+    def is_authenticated(self) -> bool:
+        """인증된 내부 요청인지 반환한다."""
+
+        return True
+
+    @property
+    def user_name(self) -> str:
+        """Task Store가 사용할 사용자 식별자를 반환한다."""
+
+        return self._user_id
 
 
 class SkillChatMessageRequest(BaseModel):
@@ -81,6 +162,7 @@ async def _persist_task(
     task_id: str,
     request: SkillChatMessageRequest,
     result: Any,
+    user_id: str,
 ) -> Task:
     """Workflow 결과를 기존 A2A Task Store에 Snapshot으로 저장한다."""
 
@@ -96,7 +178,7 @@ async def _persist_task(
         parts=[Part(text=result.text, media_type="text/plain")],
     )
     task.artifacts.append(artifact)
-    context = ServerCallContext()
+    context = ServerCallContext(user=_InternalUser(user_id))
     await task_store().save(task, context)
     await task_store().record_message(
         message_id=f"internal-{task_id}",
@@ -112,7 +194,7 @@ router = APIRouter(prefix="/api/v1/internal/skill-chat", tags=["internal-skill-c
 
 
 @router.get("/skills")
-def list_skills() -> list[dict[str, str]]:
+def list_skills(user_id: str = Depends(_authenticated_user)) -> list[dict[str, str]]:
     """Agent Card와 동일한 승인 Skill 5개를 반환한다."""
 
     if not _enabled():
@@ -121,7 +203,10 @@ def list_skills() -> list[dict[str, str]]:
 
 
 @router.post("/messages", response_model=SkillChatMessageResponse)
-async def validate_message(request: SkillChatMessageRequest) -> SkillChatMessageResponse:
+async def validate_message(
+    request: SkillChatMessageRequest,
+    user_id: str = Depends(_authenticated_user),
+) -> SkillChatMessageResponse:
     """입력을 검증하고 A2A와 공유하는 Workflow Registry를 호출한다."""
 
     if not _enabled():
@@ -131,6 +216,15 @@ async def validate_message(request: SkillChatMessageRequest) -> SkillChatMessage
         raise HTTPException(status_code=422, detail="unknown skill_id")
     input_type = "natural_language" if isinstance(request.input, str) else "json"
     payload = {"text": request.input} if isinstance(request.input, str) else request.input
+    if isinstance(payload, dict):
+        payload_user_id = payload.get("user_id")
+        if payload_user_id is not None and payload_user_id != user_id:
+            raise HTTPException(status_code=403, detail="user_id does not match OIDC subject")
+        payload = {**payload, "user_id": user_id}
+        if input_type == "json":
+            errors = sorted(_schema_validator().iter_errors(payload), key=lambda error: error.path)
+            if errors:
+                raise HTTPException(status_code=422, detail="input does not match approved skill schema")
     task_id = str(uuid4())
     result = await workflow_registry().execute(
         WorkflowRequest(
@@ -142,7 +236,7 @@ async def validate_message(request: SkillChatMessageRequest) -> SkillChatMessage
             payload=payload,
         )
     )
-    await _persist_task(task_id, request, result)
+    await _persist_task(task_id, request, result, user_id)
     return SkillChatMessageResponse(
         skill_id=request.skill_id,
         input_type=input_type,
@@ -159,26 +253,26 @@ async def validate_message(request: SkillChatMessageRequest) -> SkillChatMessage
 
 
 @router.get("/tasks/{task_id}")
-async def get_task(task_id: str) -> dict[str, Any]:
+async def get_task(task_id: str, user_id: str = Depends(_authenticated_user)) -> dict[str, Any]:
     """영속 Task Snapshot을 조회해 내부 검증 API의 Polling 결과로 반환한다."""
 
-    task = await task_store().get(task_id, ServerCallContext())
+    task = await task_store().get(task_id, ServerCallContext(user=_InternalUser(user_id)))
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
     return json_format.MessageToDict(task, preserving_proto_field_name=False)
 
 
 @router.post("/tasks/{task_id}:cancel")
-async def cancel_task(task_id: str) -> dict[str, Any]:
+async def cancel_task(task_id: str, user_id: str = Depends(_authenticated_user)) -> dict[str, Any]:
     """진행 중 Task의 취소를 기록하고 Terminal Task 취소는 거부한다."""
 
-    task = await task_store().get(task_id, ServerCallContext())
+    task = await task_store().get(task_id, ServerCallContext(user=_InternalUser(user_id)))
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
     if task.status.state in _TERMINAL_STATES:
         raise HTTPException(status_code=409, detail="task is already terminal")
     await task_store().mark_cancel_requested(task_id)
-    cancelled = await task_store().get(task_id, ServerCallContext())
+    cancelled = await task_store().get(task_id, ServerCallContext(user=_InternalUser(user_id)))
     return json_format.MessageToDict(cancelled, preserving_proto_field_name=False)
 
 

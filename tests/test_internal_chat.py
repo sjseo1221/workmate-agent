@@ -19,9 +19,13 @@ class InternalChatInputTests(unittest.TestCase):
 
     def setUp(self) -> None:
         os.environ["WORKMATE_INTERNAL_CHAT_ENABLED"] = "true"
+        os.environ["WORKMATE_INTERNAL_CHAT_DEV_AUTH"] = "true"
+        os.environ["WORKMATE_INTERNAL_CHAT_DEV_USER_ID"] = "contract-user"
 
     def tearDown(self) -> None:
         os.environ.pop("WORKMATE_INTERNAL_CHAT_ENABLED", None)
+        os.environ.pop("WORKMATE_INTERNAL_CHAT_DEV_AUTH", None)
+        os.environ.pop("WORKMATE_INTERNAL_CHAT_DEV_USER_ID", None)
 
     def test_lists_the_same_five_skills_as_agent_card(self) -> None:
         response = self.client.get("/api/v1/internal/skill-chat/skills")
@@ -59,6 +63,8 @@ class InternalChatInputTests(unittest.TestCase):
                 "input": {
                     "schema_version": "1.0",
                     "skill_id": "search_meetings",
+                    "user_id": "contract-user",
+                    "timezone": "Asia/Seoul",
                     "query": "결정사항",
                 },
             },
@@ -88,6 +94,38 @@ class InternalChatInputTests(unittest.TestCase):
             },
         )
         self.assertEqual(mismatch.status_code, 422)
+
+    def test_rejects_user_scope_mismatch(self) -> None:
+        response = self.client.post(
+            "/api/v1/internal/skill-chat/messages",
+            json={
+                "skill_id": "search_meetings",
+                "input": {
+                    "schema_version": "1.0",
+                    "skill_id": "search_meetings",
+                    "user_id": "another-user",
+                    "timezone": "Asia/Seoul",
+                    "query": "결정사항",
+                },
+            },
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_requires_authentication_when_dev_auth_is_disabled(self) -> None:
+        os.environ.pop("WORKMATE_INTERNAL_CHAT_DEV_AUTH", None)
+        response = self.client.get("/api/v1/internal/skill-chat/skills")
+        self.assertEqual(response.status_code, 401)
+
+    def test_task_snapshot_is_scoped_to_authenticated_user(self) -> None:
+        created = self.client.post(
+            "/api/v1/internal/skill-chat/messages",
+            json={"skill_id": "weekly_report", "input": "내 보고서"},
+        )
+        self.assertEqual(created.status_code, 200)
+        task_id = created.json()["task_id"]
+        os.environ["WORKMATE_INTERNAL_CHAT_DEV_USER_ID"] = "another-user"
+        response = self.client.get(f"/api/v1/internal/skill-chat/tasks/{task_id}")
+        self.assertEqual(response.status_code, 404)
 
     def test_disabled_api_is_not_available(self) -> None:
         os.environ.pop("WORKMATE_INTERNAL_CHAT_ENABLED", None)
