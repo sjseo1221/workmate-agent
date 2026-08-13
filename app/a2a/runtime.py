@@ -57,6 +57,20 @@ _SKILLS = (
 )
 
 
+def approved_skill_definitions() -> tuple[dict[str, str], ...]:
+    """내부 검증 API가 재사용할 승인된 5개 Skill 정의를 반환한다.
+
+    Returns:
+        Agent Card와 내부 검증 API가 공유하는 식별자·이름·설명 목록.
+        반환값은 호출자가 수정할 수 없도록 새 딕셔너리 튜플로 만든다.
+    """
+
+    return tuple(
+        {"id": skill_id, "name": name, "description": description}
+        for skill_id, name, description in _SKILLS
+    )
+
+
 def build_agent_card() -> AgentCard:
     """Build the SDK Agent Card exposed at the well-known route.
 
