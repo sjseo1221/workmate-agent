@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from google.protobuf import json_format
@@ -26,8 +28,17 @@ from a2a.types import (
     TaskStatus,
 )
 from app.main import app
+from app.a2a import runtime
 from app.a2a.persistence import PersistentTaskStore
 from app.a2a.runtime import RuntimeBootstrapExecutor, build_agent_card
+from app.domain.meeting import MeetingRecord
+from app.meeting_analysis import ActionItem, MeetingAnalysis
+from app.repositories.meeting_chunks import HybridSearchHit
+from app.repositories.meetings import SQLiteMeetingRepository
+from app.workflows.meetings import (
+    build_analyze_meeting_workflow,
+    build_search_meetings_workflow,
+)
 from app.workflows.registry import WorkflowRegistry
 
 
@@ -173,19 +184,97 @@ class PublicA2AContractTests(unittest.TestCase):
         self.assertIn('"task"', response.text)
 
     def test_all_five_skills_execute_through_public_route(self) -> None:
-        artifact_validator = _validator("a2a-artifact.schema.json")
-        for data in _skill_inputs():
-            response = self.client.post(
-                "/a2a/message:send",
-                json=_sdk_message(str(data["skill_id"]), data),
-                headers=self.headers,
+        """실제 Workflow 코드와 명시적 Provider Fixture로 최초 5개 Skill을 검증한다.
+
+        2026-08-17 이후 Agent Card는 11개 Skill을 공개하지만(15번 문서 결정),
+        나머지 6개(`get_meeting_analysis` 등)는 외부 Provider(OpenAI·Gmail)나
+        선행 데이터가 필요해 여기 추가하지 않았다 — 각 Skill Workflow 자체의
+        단위 테스트가 별도로 있고, 공개 A2A 경로로도 실행 가능함은 이 계약
+        테스트가 쓰는 것과 같은 `/a2a/message:send`·`registry.execute()`
+        경로이므로 동일하게 성립한다(Agent Card 등재 여부는 SDK가 skill_id를
+        걸러내는 관문이 아니다)."""
+
+        class ContractEmbeddingProvider:
+            def embed(self, texts):
+                return [(0.1,) * 1536 for _ in texts]
+
+        class ContractSearchRepository:
+            def search_hybrid(self, query, query_embedding, user_id, **kwargs):
+                return [
+                    HybridSearchHit(
+                        meeting_chunk_id="chunk-contract-1",
+                        meeting_id="meeting-1",
+                        user_id=user_id,
+                        content="예산은 1천만원으로 결정했다.",
+                        meeting_title="계약 검증 회의",
+                        meeting_started_at=datetime(2026, 8, 12, tzinfo=timezone.utc),
+                        sequence_no=0,
+                        rrf_score=0.03,
+                        dense_rank=1,
+                        keyword_rank=1,
+                    )
+                ]
+
+        def contract_analyzer(transcript: str) -> MeetingAnalysis:
+            self.assertIn("결과를 내일까지 공유한다.", transcript)
+            return MeetingAnalysis(
+                title="결과 공유 회의",
+                summary="공유 일정을 확정했다.",
+                action_items=[
+                    ActionItem(
+                        action_item_id="action-contract-1",
+                        title="결과 공유",
+                        evidence_text="결과를 내일까지 공유한다.",
+                        start_ms=0,
+                        end_ms=1000,
+                    )
+                ],
             )
-            self.assertEqual(response.status_code, 200, data["skill_id"])
-            task = response.json()["task"]
-            self.assertEqual(task["status"]["state"], "TASK_STATE_COMPLETED")
-            self.assertGreaterEqual(len(task.get("artifacts", [])), 1)
-            for artifact in task["artifacts"]:
-                artifact_validator.validate(artifact)
+
+        registry = runtime._WORKFLOW_REGISTRY
+        self.assertIsNotNone(registry)
+        assert registry is not None
+        with tempfile.TemporaryDirectory() as directory:
+            meeting_repository = SQLiteMeetingRepository(
+                Path(directory) / "contract-meetings.sqlite3"
+            )
+            meeting_repository.create(
+                MeetingRecord("meeting-1", "contract-user", "계약 검증 회의")
+            )
+            meeting_repository.save_transcript(
+                "meeting-1",
+                "contract-user",
+                0,
+                "결과를 내일까지 공유한다.",
+                True,
+                0,
+                1000,
+            )
+            handlers = {
+                "analyze_meeting": build_analyze_meeting_workflow(
+                    repository=meeting_repository,
+                    analyzer=contract_analyzer,
+                ),
+                "search_meetings": build_search_meetings_workflow(
+                    repository=ContractSearchRepository(),
+                    embedding_provider=ContractEmbeddingProvider(),
+                ),
+            }
+            with patch.dict(registry._handlers, handlers):
+                artifact_validator = _validator("a2a-artifact.schema.json")
+                for data in _skill_inputs():
+                    response = self.client.post(
+                        "/a2a/message:send",
+                        json=_sdk_message(str(data["skill_id"]), data),
+                        headers=self.headers,
+                    )
+                    self.assertEqual(response.status_code, 200, data["skill_id"])
+                    task = response.json()["task"]
+                    self.assertEqual(task["status"]["state"], "TASK_STATE_COMPLETED")
+                    self.assertGreaterEqual(len(task.get("artifacts", [])), 1)
+                    for artifact in task["artifacts"]:
+                        artifact_validator.validate(artifact)
+                        self.assertNotEqual(artifact["name"], "runtime_bootstrap")
 
     def test_authentication_and_version_failures_are_rejected(self) -> None:
         payload = _sdk_message("daily_briefing", _skill_inputs()[0])
@@ -262,6 +351,48 @@ class PublicA2AContractTests(unittest.TestCase):
                 await events.aclose()
 
         asyncio.run(scenario())
+
+
+class ArtifactPartsTextFallbackTests(unittest.TestCase):
+    """`text`만 읽는 Client도 구조화 결과를 볼 수 있는지 검증한다."""
+
+    def test_structured_result_without_markdown_still_carries_text_part(self) -> None:
+        """search_meetings·analyze_meeting처럼 data만 있는 결과도 text Part를 낸다."""
+
+        from app.workflows.registry import WorkflowResult
+
+        result = WorkflowResult(
+            artifact_name="grounded_answer",
+            artifact_description="Grounded meeting answer with exact chunk citations.",
+            text=json.dumps({"type": "grounded_answer", "data": {"answer": "근거 기반 답변"}}, ensure_ascii=False),
+            data={"type": "grounded_answer", "data": {"answer": "근거 기반 답변"}},
+        )
+
+        parts = runtime._artifact_parts(result)
+
+        self.assertTrue(
+            any(part.text for part in parts),
+            "data만 있는 결과는 최소 하나의 text Part를 포함해야 legacy client가 읽을 수 있다",
+        )
+
+    def test_markdown_result_is_unaffected(self) -> None:
+        """Markdown이 있는 기존 결과(weekly_report)는 중복 text Part를 만들지 않는다."""
+
+        from app.workflows.registry import WorkflowResult
+
+        result = WorkflowResult(
+            artifact_name="weekly_report",
+            artifact_description="Weekly report artifact.",
+            text=json.dumps({"type": "weekly_report"}, ensure_ascii=False),
+            data={"type": "weekly_report"},
+            markdown="# 주간 보고서",
+        )
+
+        parts = runtime._artifact_parts(result)
+
+        text_parts = [part for part in parts if part.text]
+        self.assertEqual(len(text_parts), 1)
+        self.assertEqual(text_parts[0].text, "# 주간 보고서")
 
 
 if __name__ == "__main__":

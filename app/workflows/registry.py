@@ -44,6 +44,8 @@ class WorkflowResult:
     artifact_name: str
     artifact_description: str
     text: str
+    data: dict[str, object] | None = None
+    markdown: str | None = None
     state: str = "completed"
     warnings: list[dict[str, object]] = field(default_factory=list)
     mock: bool = False

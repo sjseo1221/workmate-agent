@@ -36,6 +36,21 @@ from starlette.routing import BaseRoute
 
 from app.a2a.persistence import PostgresTaskStore, PersistentTaskStore
 from app.workflows.registry import WorkflowRegistry, WorkflowRequest, WorkflowResult
+from app.workflows.priority import build_rank_priorities_workflow
+from app.workflows.weekly_report import build_weekly_report_workflow
+from app.workflows.daily_briefing import build_daily_briefing_workflow
+from app.workflows.meetings import (
+    build_analyze_meeting_workflow,
+    build_search_meetings_workflow,
+)
+from app.workflows.assistant_skills import (
+    get_meeting_analysis_workflow,
+    manage_tasks_workflow,
+    read_email_workflow,
+    review_action_items_workflow,
+    review_proposal_workflow,
+)
+from app.workflows.assistant_router import assistant_ask_workflow
 
 
 A2A_VERSION = "1.0"
@@ -54,15 +69,28 @@ _SKILLS = (
     ("analyze_meeting", "Meeting analysis", "Analyze a meeting transcript."),
     ("search_meetings", "Meeting search", "Search approved meeting transcripts."),
     ("rank_priorities", "Priority ranking", "Calculate the deterministic Top 3."),
+    # 2026-08-17, 15번 문서 결정(20번 문서 구현) — 이전엔 Drawer 전용 내부 Skill로만
+    # 두고 Orchestrator Agent Card에는 올리지 않았지만(18번 문서 "핵심 설계 결정 1"),
+    # 그 결정을 뒤집어 나머지 6개도 여기 합류시켰다. `assistant_ask`(자연어 Router)는
+    # 자기 자신을 뺀 나머지 10개 중 무엇을 호출할지 LLM으로 판단하는 Meta Skill이다.
+    ("get_meeting_analysis", "Get meeting analysis", "Re-fetch a meeting's stored summary and action items."),
+    ("review_action_items", "Review action items", "Batch approve, edit, or reject meeting action item candidates."),
+    ("review_proposal", "Review proposal", "Approve or ignore an email/calendar task proposal."),
+    ("manage_tasks", "Manage tasks", "List, create, update, or delete the caller's tasks."),
+    ("read_email", "Read email", "Fetch an email's live content from Gmail for a grounded answer."),
+    ("assistant_ask", "Assistant ask", "Answer a free-text question by routing it to the right skill and phrasing the result in natural language."),
 )
 
 
 def approved_skill_definitions() -> tuple[dict[str, str], ...]:
-    """내부 검증 API가 재사용할 승인된 5개 Skill 정의를 반환한다.
+    """내부 검증 API(Drawer 포함)가 쓸 수 있는 Skill 정의를 반환한다.
+
+    지금은 Agent Card(`_SKILLS`)와 완전히 같은 11개다 — 예전엔 내부 전용 Skill을
+    따로 둬서 Agent Card보다 많았지만(2026-08-17 이전), 그 구분이 없어졌다.
 
     Returns:
-        Agent Card와 내부 검증 API가 공유하는 식별자·이름·설명 목록.
-        반환값은 호출자가 수정할 수 없도록 새 딕셔너리 튜플로 만든다.
+        식별자·이름·설명 목록. 반환값은 호출자가 수정할 수 없도록 새 딕셔너리
+        튜플로 만든다.
     """
 
     return tuple(
@@ -119,6 +147,20 @@ def build_agent_card() -> AgentCard:
     return card
 
 
+# 오케스트레이터의 "담당자" 드롭다운(`AI-agent_game_platform/frontend/src/assignee.ts`) 이름
+# 4개를 Workmate user_id로 매핑한다. `tools/m51_legacy_adapter.py`의 같은 이름 상수와 값이
+# 같아야 한다 — 그 어댑터는 `app`에 의도적으로 의존하지 않는 독립 실행 도구라 이 모듈을
+# import할 수 없어(순환/불필요한 의존 방지) 부득이 값만 중복해 둔다. "서선정"만 실제 Google
+# 연동 데이터가 있는 Workmate 계정이고(2026-08-18, `.runtime/tasks.sqlite3` 확인), 나머지
+# 3명은 자릿수·형식만 맞춘 placeholder라 매핑돼도 빈 결과만 나온다.
+ASSIGNEE_USER_IDS = {
+    "서선정": "10464531542706509691",
+    "배동우": "267494469329567778120",
+    "이승현": "568401699951365934381",
+    "변해훈": "898605867716224776814",
+}
+
+
 class RuntimeBootstrapExecutor(AgentExecutor):
     """Deterministic SDK executor used until business workflows are connected."""
 
@@ -127,6 +169,30 @@ class RuntimeBootstrapExecutor(AgentExecutor):
     ) -> None:
         self.task_store = task_store
         self.registry = registry
+
+    @staticmethod
+    def _resolve_user_id(payload: dict[str, object], request_metadata: dict[str, object]) -> str:
+        """공개 A2A 요청의 실행 사용자를 정한다.
+
+        `payload["user_id"]`(요청 `data` Part에 명시된 값)가 최우선이다 — 기존
+        호출자(계약 테스트 등)가 이미 이 필드를 쓰고 있으므로 그대로 유지한다.
+        그게 없을 때만 `request_metadata.owner`(오케스트레이터가 보내는 담당자
+        이름, 2026-08-18 R5 — `SendMessageRequest.metadata`이지 `Message.metadata`가
+        아니다. 실측으로 확인: `a2a_client.py`가 `{"message": {...}, "metadata": {...}}`를
+        평평하게 보내는데, `metadata`는 `message`의 하위 필드가 아니라 요청 자체의 형제
+        필드라서 `context.message.metadata`가 아니라 `context.metadata`로 와야 읽힌다)를
+        `ASSIGNEE_USER_IDS`로 매핑해 대신 쓴다 — 이것도 없으면 기존과 동일하게
+        `"service"`로 폴백한다. 즉 새 조회 경로를 하나 추가할 뿐, 기존에 `user_id`를
+        보내던 호출자의 동작은 전혀 바뀌지 않는다.
+        """
+
+        explicit_user_id = payload.get("user_id")
+        if explicit_user_id:
+            return str(explicit_user_id)
+        owner = request_metadata.get("owner") if request_metadata else None
+        if isinstance(owner, str) and owner in ASSIGNEE_USER_IDS:
+            return ASSIGNEE_USER_IDS[owner]
+        return "service"
 
     async def execute(self, context, event_queue: EventQueue) -> None:
         """Publish a transport-only completion for runtime smoke checks.
@@ -172,7 +238,7 @@ class RuntimeBootstrapExecutor(AgentExecutor):
                 task_id=context.task_id,
                 thread_id=context.task_id,
                 message_id=message_id,
-                user_id="service",
+                user_id=self._resolve_user_id(payload, context.metadata),
                 payload=payload,
             )
         )
@@ -182,12 +248,7 @@ class RuntimeBootstrapExecutor(AgentExecutor):
             artifact_id=str(uuid4()),
             name=result.artifact_name,
             description=result.artifact_description,
-            parts=[
-                Part(
-                    text=result.text,
-                    media_type="text/plain",
-                )
-            ],
+            parts=_artifact_parts(result),
         )
         await self.task_store.save_artifact(context.task_id, artifact)
         await event_queue.enqueue_event(
@@ -223,6 +284,30 @@ class RuntimeBootstrapExecutor(AgentExecutor):
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
         await self.task_store.mark_cancel_requested(context.task_id)
         await updater.cancel()
+
+
+def _artifact_parts(result: WorkflowResult) -> list[Part]:
+    """Workflow 결과를 승인된 A2A Artifact Part로 변환한다.
+
+    구조화 결과가 있으면 JSON DataPart를 먼저 만들고 Markdown 표현을 뒤에
+    추가한다. `text`만 읽는 Client(레거시 Orchestrator 포함)도 결과를 볼 수
+    있도록, Markdown이 없는 구조화 결과에는 `result.text`를 text/plain Part로
+    함께 제공한다. 구조화 결과가 전혀 없는 기존 Workflow는 기존 text/plain
+    계약을 그대로 유지한다.
+    """
+
+    parts: list[Part] = []
+    if result.data is not None:
+        data_part = Part(media_type="application/json")
+        json_format.ParseDict(result.data, data_part.data)
+        parts.append(data_part)
+    if result.markdown is not None:
+        parts.append(Part(text=result.markdown, media_type="text/markdown"))
+    elif result.data is not None:
+        parts.append(Part(text=result.text, media_type="text/plain"))
+    if not parts:
+        parts.append(Part(text=result.text, media_type="text/plain"))
+    return parts
 
 
 def _allowed_rest_routes(routes: Iterable[BaseRoute]) -> list[BaseRoute]:
@@ -278,9 +363,24 @@ def build_runtime_routes() -> list[BaseRoute]:
             mock=True,
         )
 
-    for skill_id in (skill[0] for skill in _SKILLS):
-        registry.register(skill_id, runtime_workflow)
+    registry.register("rank_priorities", build_rank_priorities_workflow())
+    registry.register("daily_briefing", build_daily_briefing_workflow())
+    registry.register("weekly_report", build_weekly_report_workflow)
+    registry.register("analyze_meeting", build_analyze_meeting_workflow())
+    registry.register("search_meetings", build_search_meetings_workflow())
     registry.register("runtime_bootstrap", runtime_workflow)
+    # Workmate 어시스턴트(Drawer)가 쓰려고 추가한 Skill이지만, 지금은 위 5개와
+    # 마찬가지로 Agent Card에 공개돼 있어 공개 A2A로도 호출할 수 있다(2026-08-17,
+    # 15번 문서 결정). Drawer(내부 챗봇 경로)도 같은 Registry를 그대로 호출한다.
+    registry.register("get_meeting_analysis", get_meeting_analysis_workflow)
+    registry.register("review_action_items", review_action_items_workflow)
+    registry.register("review_proposal", review_proposal_workflow)
+    registry.register("manage_tasks", manage_tasks_workflow)
+    registry.register("read_email", read_email_workflow)
+    # 자연어 Router — Drawer의 Skill 드롭다운을 대체하고, 오케스트레이터 어댑터가
+    # Skill 판별을 대신 맡기는 대상이기도 하다(20번 문서). `assistant_ask_workflow`
+    # 안에서 이 Registry를 다시 호출해(지연 Import) 실제 Skill을 실행한다.
+    registry.register("assistant_ask", assistant_ask_workflow)
     _WORKFLOW_REGISTRY = registry
 
     handler = DefaultRequestHandler(

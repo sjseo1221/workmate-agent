@@ -35,8 +35,13 @@ Push notification, task list, extended card Route와 SDK 호환용 `GET /a2a/tas
 ```powershell
 $env:WORKMATE_SERVICE_TOKEN = 'local-development-token'
 uv sync --frozen
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8001
+uv run python -m app.server
 ```
+
+Windows에서 PostgreSQL Task Store를 사용할 때도 위 명령을 사용한다. 직접
+`uvicorn app.main:app`을 실행하면 기본 Proactor Event Loop와 psycopg async
+연결이 호환되지 않는다. 주소와 포트는 `WORKMATE_HOST`, `WORKMATE_PORT`로
+변경한다.
 
 확인:
 
@@ -66,6 +71,14 @@ M0.1-01과 M0.1-02의 기준 테스트는 `tests/` 아래의 공식 SDK 런타�
 
 ```powershell
 uv run python -m unittest discover -s tests -v
+```
+
+M5.1 Workmate A2A 호환성 검수는 실행 중인 Agent를 실제 HTTP로 호출한다. 운영 Orchestrator가 없어도 Workmate의 Agent Card·5개 Skill·Artifact·Mock 차단을 먼저 확인할 수 있다. 이 결과는 M5.1 사전 호환성 증빙이며 실제 Orchestrator 종단 간 완료를 대신하지 않는다.
+
+```powershell
+$env:WORKMATE_A2A_BASE_URL = 'http://127.0.0.1:8001/a2a'
+$env:WORKMATE_SERVICE_TOKEN = '로컬 토큰'
+uv run python tools/m51_a2a_compatibility.py
 ```
 
 테스트는 Agent Card의 HTTP+JSON·Streaming 선언, SDK Route allowlist, Bearer Token·`A2A-Version` 검사, SDK Message 직렬화, 승인된 Skill·Artifact Schema 검증, `message:send`·Streaming 응답을 확인합니다. Schema는 Superproject의 `docs/schemas/`를 자동 탐색하며, 별도 checkout에서는 `WORKMATE_SCHEMA_ROOT`로 지정합니다.

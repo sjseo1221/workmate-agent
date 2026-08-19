@@ -15,8 +15,10 @@ from a2a.types import ListTasksRequest, Task, TaskState, TaskStatus
 
 from app.a2a.persistence import PostgresTaskStore
 
+TEST_DATABASE_URL = os.getenv("WORKMATE_TEST_DATABASE_URL")
 
-@unittest.skipUnless(os.getenv("DATABASE_URL"), "DATABASE_URL is not configured")
+
+@unittest.skipUnless(TEST_DATABASE_URL, "WORKMATE_TEST_DATABASE_URL is not configured")
 class PostgresPersistenceIntegrationTests(unittest.TestCase):
     """PostgreSQL Migration과 Task·Message 멱등성 경계를 확인한다."""
 
@@ -27,7 +29,7 @@ class PostgresPersistenceIntegrationTests(unittest.TestCase):
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
         async def scenario() -> None:
-            store = PostgresTaskStore(os.environ["DATABASE_URL"])
+            store = PostgresTaskStore(TEST_DATABASE_URL)
             context = ServerCallContext()
             task = Task(
                 id="postgres-integration-task",

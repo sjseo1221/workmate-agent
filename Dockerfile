@@ -10,6 +10,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 COPY app ./app
 COPY migrations ./migrations
+COPY tools ./tools
 
 EXPOSE 8001
 

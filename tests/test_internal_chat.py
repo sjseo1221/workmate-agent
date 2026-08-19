@@ -98,16 +98,26 @@ class InternalChatInputTests(unittest.TestCase):
             headers={"kid": "workmate-test-key"},
         )
 
-    def test_lists_the_same_five_skills_as_agent_card(self) -> None:
+    def test_lists_the_same_eleven_skills_as_the_public_agent_card(self) -> None:
+        """내부 검증 API(Drawer 포함)와 Agent Card는 이제 같은 11개 목록이다
+        (2026-08-17, 15번 문서 결정으로 18번 문서 "핵심 설계 결정 1"을 뒤집어
+        Workmate 어시스턴트 전용이던 6개도 Orchestrator 공개 계약에 합류시켰다,
+        20번 문서 1단계)."""
+
         response = self.client.get("/api/v1/internal/skill-chat/skills")
         self.assertEqual(response.status_code, 200)
         card = self.client.get("/.well-known/agent-card.json")
         self.assertEqual(card.status_code, 200)
+        internal_ids = [skill["id"] for skill in response.json()]
+        card_ids = [skill["id"] for skill in card.json()["skills"]]
+        self.assertEqual(card_ids, internal_ids)
         self.assertEqual(
-            [skill["id"] for skill in response.json()],
-            [skill["id"] for skill in card.json()["skills"]],
+            internal_ids,
+            [
+                "daily_briefing", "weekly_report", "analyze_meeting", "search_meetings", "rank_priorities",
+                "get_meeting_analysis", "review_action_items", "review_proposal", "manage_tasks", "read_email", "assistant_ask",
+            ],
         )
-        self.assertEqual(len(response.json()), 5)
 
     def test_accepts_natural_language_and_json_input(self) -> None:
         natural = self.client.post(
@@ -117,30 +127,46 @@ class InternalChatInputTests(unittest.TestCase):
         self.assertEqual(natural.status_code, 200)
         self.assertEqual(natural.json()["input_type"], "natural_language")
         self.assertEqual(natural.json()["state"], "completed")
-        self.assertTrue(natural.json()["artifact"]["mock"])
-        self.assertFalse(natural.json()["artifact"]["business_result"])
+        self.assertFalse(natural.json()["artifact"]["mock"])
+        self.assertTrue(natural.json()["artifact"]["business_result"])
         task_id = natural.json()["task_id"]
         task = self.client.get(f"/api/v1/internal/skill-chat/tasks/{task_id}")
         self.assertEqual(task.status_code, 200)
         self.assertEqual(task.json()["status"]["state"], "TASK_STATE_COMPLETED")
-        self.assertTrue(task.json()["artifacts"][0]["metadata"]["mock"])
-        self.assertFalse(task.json()["artifacts"][0]["metadata"]["business_result"])
+        self.assertFalse(task.json()["artifacts"][0]["metadata"]["mock"])
+        self.assertTrue(task.json()["artifacts"][0]["metadata"]["business_result"])
         cancel = self.client.post(f"/api/v1/internal/skill-chat/tasks/{task_id}:cancel")
         self.assertEqual(cancel.status_code, 409)
 
-        structured = self.client.post(
-            "/api/v1/internal/skill-chat/messages",
-            json={
-                "skill_id": "search_meetings",
-                "input": {
-                    "schema_version": "1.0",
-                    "skill_id": "search_meetings",
-                    "user_id": "contract-user",
-                    "timezone": "Asia/Seoul",
-                    "query": "결정사항",
+        search_result = WorkflowResult(
+            artifact_name="grounded_answer",
+            artifact_description="내부 입력 형식 검증용 검색 결과",
+            text="근거가 충분하지 않습니다.",
+            data={
+                "type": "grounded_answer",
+                "data": {
+                    "answer": "근거가 충분하지 않습니다.",
+                    "sources": [],
+                    "insufficient_evidence": True,
                 },
             },
+            mock=False,
         )
+        with patch("app.internal_chat.workflow_registry") as registry:
+            registry.return_value.execute = AsyncMock(return_value=search_result)
+            structured = self.client.post(
+                "/api/v1/internal/skill-chat/messages",
+                json={
+                    "skill_id": "search_meetings",
+                    "input": {
+                        "schema_version": "1.0",
+                        "skill_id": "search_meetings",
+                        "user_id": "contract-user",
+                        "timezone": "Asia/Seoul",
+                        "query": "결정사항",
+                    },
+                },
+            )
         self.assertEqual(structured.status_code, 200)
         self.assertEqual(structured.json()["input_type"], "json")
 
@@ -258,6 +284,158 @@ class InternalChatInputTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["warnings"], result.warnings)
+
+    def test_workflow_value_error_becomes_a_cors_visible_422(self) -> None:
+        """Workflow가 잘못된 입력·상태를 관례대로 `ValueError`로 표시하면
+        (동기 Skill 기준) 이를 잡아 422로 변환해야 한다. 잡지 않으면 CORS
+        헤더 없는 500이 나가 브라우저에서는 실제 오류 대신 `Failed to
+        fetch`만 보인다 — 2026-08-15 실사용 중 재현·확인된 버그.
+
+        `analyze_meeting`은 2026-08-16(17번 갭 문서 #7)부터 비동기 Task
+        Polling 경로를 타 이 동기 422 계약 밖이다 —
+        `test_analyze_meeting_value_error_surfaces_as_a_failed_task`가
+        그 경로를 별도로 검증한다. 여기서는 여전히 동기인 `search_meetings`로
+        같은 오류 변환 규칙을 검증한다."""
+
+        with patch("app.internal_chat.workflow_registry") as registry:
+            registry.return_value.execute = AsyncMock(side_effect=ValueError("query must not be blank"))
+            response = self.client.post(
+                "/api/v1/internal/skill-chat/messages",
+                json={"skill_id": "search_meetings", "input": "회의 검색"},
+                headers={"Origin": "http://localhost:3000"},
+            )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"], "query must not be blank")
+        # CORS 헤더가 실제로 붙어 있어야 브라우저가 이 응답을 읽을 수 있다.
+        self.assertEqual(response.headers.get("access-control-allow-origin"), "http://localhost:3000")
+
+    def test_workflow_runtime_error_becomes_a_cors_visible_503(self) -> None:
+        """Workflow 계층은 인프라/설정 미비(예: `search_meetings`의
+        `DATABASE_URL is required`)를 관례대로 `RuntimeError`로 표시한다.
+        ValueError와 같은 이유로 이를 잡지 않으면 CORS 헤더 없는 500이 나가
+        `Failed to fetch`만 보인다 — 2026-08-15 실사용 중 재현·확인된 버그
+        (필터를 적용한 회의록 검색에서 발생)."""
+
+        with patch("app.internal_chat.workflow_registry") as registry:
+            registry.return_value.execute = AsyncMock(
+                side_effect=RuntimeError("DATABASE_URL is required for search_meetings")
+            )
+            response = self.client.post(
+                "/api/v1/internal/skill-chat/messages",
+                json={"skill_id": "search_meetings", "input": "QA 빌드 일정은 언제 결정됐어?"},
+                headers={"Origin": "http://localhost:3000"},
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], "DATABASE_URL is required for search_meetings")
+        self.assertEqual(response.headers.get("access-control-allow-origin"), "http://localhost:3000")
+
+    def test_jwks_network_failure_becomes_a_cors_visible_503(self) -> None:
+        """JWKS Key를 가져오는 실제 네트워크 호출이 실패하면(DNS·연결 재설정 등)
+        `jwt.PyJWTError`가 아닌 원본 네트워크 예외가 그대로 올라온다. 예전엔 이를
+        잡지 않아 CORS 없는 500이 나가 "Failed to fetch"로 보였다 — 2026-08-15
+        실사용 중 오늘 브리핑의 두 동시 요청이 나란히 이 오류를 맞아 화면이
+        "브리핑을 아직 실행하지 않았습니다"에 멈춰 있는 것으로 재현·확인됐다."""
+
+        from urllib.error import URLError
+
+        with patch("app.internal_chat._jwks_client") as jwks_client:
+            jwks_client.return_value.get_signing_key_from_jwt.side_effect = URLError("network is unreachable")
+            response = self.client.post(
+                "/api/v1/internal/skill-chat/messages",
+                json={"skill_id": "daily_briefing", "input": "오늘 브리핑"},
+                headers={"Origin": "http://localhost:3000"},
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.headers.get("access-control-allow-origin"), "http://localhost:3000")
+
+    def test_analyze_meeting_returns_submitted_immediately_then_polls_to_completed(self) -> None:
+        """`analyze_meeting`은 즉시 `state="submitted"`로 응답하고, 실제 STT+LLM
+        실행은 백그라운드에서 끝난 뒤 Task Polling으로 드러나야 한다
+        (2026-08-16, 17번 갭 문서 #7). `TestClient`는 `BackgroundTasks`를 응답
+        직후 같은 호출 안에서 실행하므로, `client.post`가 돌아온 시점에는
+        이미 아래 결과로 Task가 갱신돼 있다."""
+
+        result = WorkflowResult(
+            artifact_name="meeting_analysis",
+            artifact_description="회의 분석 결과",
+            text="분석이 끝났습니다.",
+            data={"type": "meeting_analysis", "data": {"meeting_id": "m-1", "summary": "요약", "action_items": [], "transcript_ref": "t-1", "source_refs": []}},
+            mock=False,
+        )
+        with patch("app.internal_chat.workflow_registry") as registry:
+            registry.return_value.execute = AsyncMock(return_value=result)
+            submitted = self.client.post(
+                "/api/v1/internal/skill-chat/messages",
+                json={"skill_id": "analyze_meeting", "input": "회의 분석 실행"},
+            )
+        self.assertEqual(submitted.status_code, 200)
+        self.assertEqual(submitted.json()["state"], "submitted")
+        task_id = submitted.json()["task_id"]
+
+        completed = self.client.get(f"/api/v1/internal/skill-chat/tasks/{task_id}")
+        self.assertEqual(completed.status_code, 200)
+        self.assertEqual(completed.json()["status"]["state"], "TASK_STATE_COMPLETED")
+        self.assertFalse(completed.json()["artifacts"][0]["metadata"]["mock"])
+
+    def test_analyze_meeting_value_error_surfaces_as_a_failed_task(self) -> None:
+        """동기 Skill이라면 422로 바뀌었을 `ValueError`가, 비동기 경로에서는
+        `FAILED` Task의 `status.message`에 담겨 Polling으로 드러나야 한다
+        (2026-08-16, 17번 갭 문서 #7)."""
+
+        with patch("app.internal_chat.workflow_registry") as registry:
+            registry.return_value.execute = AsyncMock(side_effect=ValueError("final transcript is required"))
+            submitted = self.client.post(
+                "/api/v1/internal/skill-chat/messages",
+                json={"skill_id": "analyze_meeting", "input": "회의 분석 실행"},
+            )
+        self.assertEqual(submitted.status_code, 200)
+        task_id = submitted.json()["task_id"]
+
+        failed = self.client.get(f"/api/v1/internal/skill-chat/tasks/{task_id}")
+        self.assertEqual(failed.status_code, 200)
+        self.assertEqual(failed.json()["status"]["state"], "TASK_STATE_FAILED")
+        self.assertEqual(failed.json()["status"]["message"]["parts"][0]["text"], "final transcript is required")
+
+    def test_assistant_ask_is_also_async_and_carries_a_parseable_reply_envelope(self) -> None:
+        """`assistant_ask`(자연어 Router, 2026-08-17)도 `analyze_meeting`처럼
+        Task Polling 경로를 탄다 — 어떤 Skill로 풀릴지 호출 전엔 모르고,
+        `analyze_meeting`으로 풀리면 STT+LLM만큼 오래 걸릴 수 있어서다
+        (`app/internal_chat.py`의 `_ASYNC_SKILLS` Docstring 참고). Task Store는
+        `text`만 저장하므로, 그 `text`가 프론트가 파싱할 수 있는 답변 Envelope
+        JSON인지 확인한다."""
+
+        result = WorkflowResult(
+            artifact_name="assistant_ask",
+            artifact_description="자연어 답변",
+            text=json.dumps({"type": "assistant_reply", "data": {"reply": "오늘 일정은 없어요.", "executed_skill_id": "daily_briefing", "pending_action": None}}, ensure_ascii=False),
+            data={"type": "assistant_reply", "data": {"reply": "오늘 일정은 없어요.", "executed_skill_id": "daily_briefing", "pending_action": None}},
+            markdown="오늘 일정은 없어요.",
+            mock=False,
+        )
+        with patch("app.internal_chat.workflow_registry") as registry:
+            registry.return_value.execute = AsyncMock(return_value=result)
+            submitted = self.client.post(
+                "/api/v1/internal/skill-chat/messages",
+                json={
+                    "skill_id": "assistant_ask",
+                    "input": {
+                        "schema_version": "1.0",
+                        "skill_id": "assistant_ask",
+                        "user_id": "contract-user",
+                        "text": "오늘 브리핑 보여줘",
+                    },
+                },
+            )
+        self.assertEqual(submitted.status_code, 200)
+        self.assertEqual(submitted.json()["state"], "submitted")
+        task_id = submitted.json()["task_id"]
+
+        completed = self.client.get(f"/api/v1/internal/skill-chat/tasks/{task_id}")
+        self.assertEqual(completed.status_code, 200)
+        self.assertEqual(completed.json()["status"]["state"], "TASK_STATE_COMPLETED")
+        envelope = json.loads(completed.json()["artifacts"][0]["parts"][0]["text"])
+        self.assertEqual(envelope["data"]["reply"], "오늘 일정은 없어요.")
+        self.assertIsNone(envelope["data"]["pending_action"])
 
     def test_disabled_api_and_unknown_task(self) -> None:
         os.environ.pop("WORKMATE_INTERNAL_CHAT_ENABLED", None)

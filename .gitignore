@@ -1,5 +1,14 @@
 .env
+.env.*.tmp
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+
+# 실행 산출물 - 실제 Google OAuth 토큰/SQLite DB(.runtime/gmail_access_token.txt,
+# google_credentials.sqlite3 등)가 여기 쌓인다. 커밋하면 자격증명이 그대로 GitHub에 올라간다.
+.runtime/
+runtime/
+*.log
+*.err
+*.out
