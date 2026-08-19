@@ -1,0 +1,576 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://workmate.example.com/schemas/workmate-skill-schemas-1.0.json",
+  "title": "Workmate Skill Schemas 1.0",
+  "oneOf": [
+    { "$ref": "#/$defs/DailyBriefingInput" },
+    { "$ref": "#/$defs/WeeklyReportInput" },
+    { "$ref": "#/$defs/AnalyzeMeetingInput" },
+    { "$ref": "#/$defs/SearchMeetingsInput" },
+    { "$ref": "#/$defs/RankPrioritiesInput" },
+    { "$ref": "#/$defs/GetMeetingAnalysisInput" },
+    { "$ref": "#/$defs/ReviewActionItemsInput" },
+    { "$ref": "#/$defs/ReviewProposalInput" },
+    { "$ref": "#/$defs/ManageTasksInput" },
+    { "$ref": "#/$defs/AssistantAskInput" },
+    { "$ref": "#/$defs/WorkmateResultEnvelope" }
+  ],
+  "$defs": {
+    "Identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "Timezone": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "examples": ["Asia/Seoul"]
+    },
+    "Locale": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$",
+      "default": "ko-KR"
+    },
+    "DailyBriefingInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "skill_id", "user_id", "timezone"],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "skill_id": { "const": "daily_briefing" },
+        "user_id": { "$ref": "#/$defs/Identifier" },
+        "timezone": { "$ref": "#/$defs/Timezone" },
+        "locale": { "$ref": "#/$defs/Locale" },
+        "as_of": { "type": "string", "format": "date-time" }
+      }
+    },
+    "WeeklyReportInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "skill_id", "user_id", "timezone"],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "skill_id": { "const": "weekly_report" },
+        "user_id": { "$ref": "#/$defs/Identifier" },
+        "timezone": { "$ref": "#/$defs/Timezone" },
+        "locale": { "$ref": "#/$defs/Locale" },
+        "week_of": { "type": "string", "format": "date" }
+      }
+    },
+    "AnalyzeMeetingInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "skill_id", "user_id", "timezone", "meeting_id"],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "skill_id": { "const": "analyze_meeting" },
+        "user_id": { "$ref": "#/$defs/Identifier" },
+        "timezone": { "$ref": "#/$defs/Timezone" },
+        "locale": { "$ref": "#/$defs/Locale" },
+        "meeting_id": { "$ref": "#/$defs/Identifier" }
+      }
+    },
+    "SearchMeetingsInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "skill_id", "user_id", "timezone", "query"],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "skill_id": { "const": "search_meetings" },
+        "user_id": { "$ref": "#/$defs/Identifier" },
+        "timezone": { "$ref": "#/$defs/Timezone" },
+        "locale": { "$ref": "#/$defs/Locale" },
+        "query": { "type": "string", "minLength": 1, "maxLength": 1000, "pattern": ".*\\S.*" },
+        "filters": { "$ref": "#/$defs/MeetingSearchFilters" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 20, "default": 5 }
+      }
+    },
+    "MeetingSearchFilters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "date_from": { "type": "string", "format": "date" },
+        "date_to": { "type": "string", "format": "date" },
+        "meeting_ids": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/Identifier" }
+        },
+        "participants": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/Identifier" }
+        }
+      }
+    },
+    "RankPrioritiesInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "skill_id", "user_id", "timezone"],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "skill_id": { "const": "rank_priorities" },
+        "user_id": { "$ref": "#/$defs/Identifier" },
+        "timezone": { "$ref": "#/$defs/Timezone" },
+        "locale": { "$ref": "#/$defs/Locale" },
+        "as_of": { "type": "string", "format": "date-time" },
+        "compare_with_previous": { "type": "boolean", "default": true }
+      }
+    },
+    "GetMeetingAnalysisInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "skill_id", "user_id", "meeting_id"],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "skill_id": { "const": "get_meeting_analysis" },
+        "user_id": { "$ref": "#/$defs/Identifier" },
+        "timezone": { "$ref": "#/$defs/Timezone" },
+        "locale": { "$ref": "#/$defs/Locale" },
+        "meeting_id": { "$ref": "#/$defs/Identifier" }
+      }
+    },
+    "ActionItemDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_item_id", "decision"],
+      "properties": {
+        "action_item_id": { "$ref": "#/$defs/Identifier" },
+        "decision": { "type": "string", "enum": ["approve", "edit", "reject"] },
+        "changes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+            "description": { "type": ["string", "null"] },
+            "due_at": { "type": ["string", "null"], "format": "date-time" },
+            "assignee_user_id": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+    "ReviewActionItemsInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "skill_id", "user_id", "meeting_id", "decisions"],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "skill_id": { "const": "review_action_items" },
+        "user_id": { "$ref": "#/$defs/Identifier" },
+        "timezone": { "$ref": "#/$defs/Timezone" },
+        "locale": { "$ref": "#/$defs/Locale" },
+        "meeting_id": { "$ref": "#/$defs/Identifier" },
+        "decisions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": { "$ref": "#/$defs/ActionItemDecision" }
+        }
+      }
+    },
+    "ReviewProposalInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "skill_id", "user_id", "source_type", "decision"],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "skill_id": { "const": "review_proposal" },
+        "user_id": { "$ref": "#/$defs/Identifier" },
+        "timezone": { "$ref": "#/$defs/Timezone" },
+        "locale": { "$ref": "#/$defs/Locale" },
+        "source_type": { "type": "string", "enum": ["email", "calendar"] },
+        "decision": { "type": "string", "enum": ["approve", "ignore"] },
+        "message_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "calendar_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "event_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "task": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+            "assignee_user_id": { "$ref": "#/$defs/Identifier" },
+            "due_at": { "type": ["string", "null"], "format": "date-time" },
+            "priority_hint": { "type": ["integer", "null"], "minimum": 0, "maximum": 10 }
+          }
+        },
+        "allow_similar_duplicate": { "type": "boolean", "default": false }
+      }
+    },
+    "ManageTasksInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "skill_id", "user_id", "action"],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "skill_id": { "const": "manage_tasks" },
+        "user_id": { "$ref": "#/$defs/Identifier" },
+        "timezone": { "$ref": "#/$defs/Timezone" },
+        "locale": { "$ref": "#/$defs/Locale" },
+        "action": { "type": "string", "enum": ["list", "create", "update", "delete"] },
+        "task_id": { "$ref": "#/$defs/Identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "status": { "type": "string", "enum": ["todo", "in_progress", "blocked", "done", "cancelled"] },
+        "priority_hint": { "type": ["integer", "null"], "minimum": 0, "maximum": 10 },
+        "due_at": { "type": ["string", "null"], "format": "date-time" },
+        "due_before": { "type": "string", "format": "date-time" },
+        "include_deleted": { "type": "boolean", "default": false }
+      }
+    },
+    "AssistantAskContextMeeting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meeting_id", "title"],
+      "properties": {
+        "meeting_id": { "$ref": "#/$defs/Identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "has_analysis": { "type": ["boolean", "null"] }
+      }
+    },
+    "AssistantAskContextProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proposal_id", "title", "source_type"],
+      "properties": {
+        "proposal_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "source_type": { "type": "string", "enum": ["email", "calendar"] },
+        "message_id": { "type": ["string", "null"], "maxLength": 500 },
+        "calendar_id": { "type": ["string", "null"], "maxLength": 500 },
+        "event_id": { "type": ["string", "null"], "maxLength": 500 },
+        "due_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "AssistantAskContextPendingActionItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meeting_id", "action_item_id"],
+      "properties": {
+        "meeting_id": { "$ref": "#/$defs/Identifier" },
+        "action_item_id": { "$ref": "#/$defs/Identifier" }
+      }
+    },
+    "AssistantAskInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "skill_id", "user_id", "text"],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "skill_id": { "const": "assistant_ask" },
+        "user_id": { "$ref": "#/$defs/Identifier" },
+        "timezone": { "$ref": "#/$defs/Timezone" },
+        "locale": { "$ref": "#/$defs/Locale" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": ".*\\S.*" },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "meetings": {
+              "type": "array",
+              "maxItems": 50,
+              "items": { "$ref": "#/$defs/AssistantAskContextMeeting" }
+            },
+            "proposals": {
+              "type": "array",
+              "maxItems": 50,
+              "items": { "$ref": "#/$defs/AssistantAskContextProposal" }
+            },
+            "pending_action_items": {
+              "type": "array",
+              "maxItems": 50,
+              "items": { "$ref": "#/$defs/AssistantAskContextPendingActionItem" }
+            }
+          }
+        },
+        "confirmed_skill_id": { "type": ["string", "null"] },
+        "confirmed_arguments": { "type": ["object", "null"] },
+        "history": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role", "text"],
+            "properties": {
+              "role": { "type": "string", "enum": ["user", "assistant"] },
+              "text": { "type": "string", "minLength": 1, "maxLength": 2000 }
+            }
+          }
+        }
+      }
+    },
+    "Warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "code", "message", "retryable"],
+      "properties": {
+        "source": { "type": "string", "enum": ["task", "calendar", "email", "meeting", "llm", "stt"] },
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+        "message": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "retryable": { "type": "boolean" },
+        "last_success_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "DataFreshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task": { "type": ["string", "null"], "format": "date-time" },
+        "calendar": { "type": ["string", "null"], "format": "date-time" },
+        "email": { "type": ["string", "null"], "format": "date-time" },
+        "meeting": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "PriorityScoreBreakdown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deadline", "importance", "blocked_or_overdue", "meeting_commitment", "calendar_relevance"],
+      "properties": {
+        "deadline": { "type": "integer", "minimum": 0, "maximum": 40 },
+        "importance": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "blocked_or_overdue": { "type": "integer", "minimum": 0, "maximum": 15 },
+        "meeting_commitment": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "calendar_relevance": { "type": "integer", "minimum": 0, "maximum": 10 }
+      }
+    },
+    "PriorityItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rank", "task_id", "title", "score", "reasons"],
+      "properties": {
+        "rank": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "task_id": { "$ref": "#/$defs/Identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "score": { "type": "integer", "minimum": 0, "maximum": 95 },
+        "score_breakdown": { "$ref": "#/$defs/PriorityScoreBreakdown" },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+        }
+      }
+    },
+    "CalendarItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "title", "starts_at", "ends_at"],
+      "properties": {
+        "event_id": { "$ref": "#/$defs/Identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "starts_at": { "type": "string", "format": "date-time" },
+        "ends_at": { "type": "string", "format": "date-time" },
+        "related_task_ids": { "type": "array", "items": { "$ref": "#/$defs/Identifier" }, "uniqueItems": true }
+      }
+    },
+    "ImportantSignal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "source_id", "summary"],
+      "properties": {
+        "type": { "type": "string", "enum": ["email", "calendar", "meeting_action_item", "task"] },
+        "source_id": { "$ref": "#/$defs/Identifier" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "related_task_ids": { "type": "array", "items": { "$ref": "#/$defs/Identifier" }, "uniqueItems": true }
+      }
+    },
+    "DailyBriefingResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["date", "summary", "calendar_events", "important_signals", "priorities", "source_refs"],
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "calendar_events": { "type": "array", "items": { "$ref": "#/$defs/CalendarItem" } },
+        "important_signals": { "type": "array", "items": { "$ref": "#/$defs/ImportantSignal" } },
+        "priorities": { "type": "array", "maxItems": 3, "items": { "$ref": "#/$defs/PriorityItem" } },
+        "source_refs": { "type": "array", "items": { "$ref": "#/$defs/Identifier" }, "uniqueItems": true }
+      }
+    },
+    "Period": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "string", "format": "date" },
+        "end": { "type": "string", "format": "date" }
+      }
+    },
+    "WorkItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "title", "status", "source_refs"],
+      "properties": {
+        "task_id": { "$ref": "#/$defs/Identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "status": { "type": "string", "enum": ["todo", "in_progress", "blocked", "done", "cancelled"] },
+        "summary": { "type": ["string", "null"], "maxLength": 1000 },
+        "due_at": { "type": ["string", "null"], "format": "date-time" },
+        "source_refs": { "type": "array", "items": { "$ref": "#/$defs/Identifier" }, "uniqueItems": true }
+      }
+    },
+    "PlanItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "kind", "source_refs"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "kind": { "type": "string", "enum": ["planned", "carry_over", "suggestion"] },
+        "source_refs": { "type": "array", "items": { "$ref": "#/$defs/Identifier" }, "uniqueItems": true }
+      }
+    },
+    "WeeklyReportResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["period", "summary", "completed", "in_progress", "delayed", "unresolved_issues", "next_week_plans", "source_refs"],
+      "properties": {
+        "period": { "$ref": "#/$defs/Period" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 3000 },
+        "completed": { "type": "array", "items": { "$ref": "#/$defs/WorkItem" } },
+        "in_progress": { "type": "array", "items": { "$ref": "#/$defs/WorkItem" } },
+        "delayed": { "type": "array", "items": { "$ref": "#/$defs/WorkItem" } },
+        "unresolved_issues": { "type": "array", "items": { "$ref": "#/$defs/WorkItem" } },
+        "next_week_plans": { "type": "array", "items": { "$ref": "#/$defs/PlanItem" } },
+        "source_refs": { "type": "array", "items": { "$ref": "#/$defs/Identifier" }, "uniqueItems": true }
+      }
+    },
+    "EvidenceSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meeting_chunk_ids", "start_ms", "end_ms"],
+      "properties": {
+        "meeting_chunk_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/Identifier" }
+        },
+        "start_ms": { "type": "integer", "minimum": 0 },
+        "end_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ActionItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_item_id", "title", "approval_status", "confidence", "evidence_span", "evidence_text"],
+      "properties": {
+        "action_item_id": { "$ref": "#/$defs/Identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "description": { "type": ["string", "null"], "maxLength": 2000 },
+        "assignee_user_id": { "anyOf": [{ "$ref": "#/$defs/Identifier" }, { "type": "null" }] },
+        "due_at": { "type": ["string", "null"], "format": "date-time" },
+        "approval_status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "evidence_span": { "$ref": "#/$defs/EvidenceSpan" },
+        "evidence_text": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "MeetingAnalysisResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meeting_id", "summary", "action_items", "transcript_ref", "source_refs"],
+      "properties": {
+        "meeting_id": { "$ref": "#/$defs/Identifier" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 5000 },
+        "action_items": { "type": "array", "items": { "$ref": "#/$defs/ActionItem" } },
+        "transcript_ref": { "$ref": "#/$defs/Identifier" },
+        "source_refs": { "type": "array", "items": { "$ref": "#/$defs/Identifier" }, "uniqueItems": true }
+      }
+    },
+    "MeetingSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meeting_id", "meeting_title", "meeting_date", "meeting_chunk_id", "quote"],
+      "properties": {
+        "meeting_id": { "$ref": "#/$defs/Identifier" },
+        "meeting_title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "meeting_date": { "type": "string", "format": "date" },
+        "speaker": { "type": ["string", "null"], "maxLength": 200 },
+        "meeting_chunk_id": { "$ref": "#/$defs/Identifier" },
+        "quote": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "GroundedAnswerResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["answer", "sources", "insufficient_evidence"],
+      "properties": {
+        "answer": { "type": "string", "minLength": 1, "maxLength": 5000 },
+        "sources": { "type": "array", "items": { "$ref": "#/$defs/MeetingSource" } },
+        "insufficient_evidence": { "type": "boolean" }
+      }
+    },
+    "PriorityChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "change_type", "reason"],
+      "properties": {
+        "task_id": { "$ref": "#/$defs/Identifier" },
+        "change_type": { "type": "string", "enum": ["entered", "moved_up", "moved_down", "removed", "unchanged"] },
+        "previous_rank": { "type": ["integer", "null"], "minimum": 1 },
+        "current_rank": { "type": ["integer", "null"], "minimum": 1 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    },
+    "PriorityRankingResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["calculated_at", "priorities", "changes", "source_refs"],
+      "properties": {
+        "calculated_at": { "type": "string", "format": "date-time" },
+        "priorities": { "type": "array", "maxItems": 3, "items": { "$ref": "#/$defs/PriorityItem" } },
+        "changes": { "type": "array", "items": { "$ref": "#/$defs/PriorityChange" } },
+        "source_refs": { "type": "array", "items": { "$ref": "#/$defs/Identifier" }, "uniqueItems": true }
+      }
+    },
+    "TypedResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "data"],
+          "properties": { "type": { "const": "daily_briefing" }, "data": { "$ref": "#/$defs/DailyBriefingResult" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "data"],
+          "properties": { "type": { "const": "weekly_report" }, "data": { "$ref": "#/$defs/WeeklyReportResult" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "data"],
+          "properties": { "type": { "const": "meeting_analysis" }, "data": { "$ref": "#/$defs/MeetingAnalysisResult" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "data"],
+          "properties": { "type": { "const": "grounded_answer" }, "data": { "$ref": "#/$defs/GroundedAnswerResult" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "data"],
+          "properties": { "type": { "const": "priority_ranking" }, "data": { "$ref": "#/$defs/PriorityRankingResult" } }
+        }
+      ]
+    },
+    "WorkmateResultEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "request_id", "generated_at", "data_freshness", "warnings", "result"],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "request_id": { "$ref": "#/$defs/Identifier" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "data_freshness": { "$ref": "#/$defs/DataFreshness" },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/Warning" } },
+        "result": { "$ref": "#/$defs/TypedResult" }
+      }
+    }
+  }
+}
