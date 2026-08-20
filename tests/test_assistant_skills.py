@@ -196,47 +196,40 @@ class AssistantSkillsTests(unittest.TestCase):
     # "메일 내용 요약해줘"에 답할 근거가 없었다. 매 질문마다 Gmail을 다시
     # 조회해 실제 본문을 가져오는 이 Skill로 해결한다.) ---
 
-    def test_read_email_default_credential_dir_matches_dev_gmail_sync_api(self) -> None:
-        """실사용 중 발견한 회귀 — `assistant_skills.py`는 `app/workflows/` 아래에
-        있어 `app/` 바로 아래인 `dev_gmail_sync_api.py`보다 한 단계 더 깊은데,
-        기본 경로 계산이 그 깊이 차이를 반영하지 못해 같은 `google-oauth-test`
-        디렉터리를 가리키지 못했다 — `GOOGLE_TOKEN_FILE`을 따로 지정하지 않은
-        실제 서버에서 Token 파일이 있는데도 "Gmail 인증이 안 되어 있다"고
-        잘못 답했다. 두 모듈의 기본 경로가 실제로 같은 디렉터리를 가리키는지
-        확인한다(문자열이 아니라 값이 같아야 한다 — `dev_gmail_sync_api.py`가
-        먼저 검증된 쪽이라 그쪽에 맞춘다)."""
+    def test_read_email_returns_no_connection_message_when_credentials_are_missing(self) -> None:
+        """2026-08-20 변경 — 공유 `GOOGLE_TOKEN_FILE` 대신 `request.user_id`로
+        사용자별 DB Credential(`app/repositories/google_credentials.py`)을 조회한다.
+        연결된 계정이 없으면 `build_authorized_session_for_user`가
+        `GoogleCredentialError`를 던진다."""
 
-        from app.dev_gmail_sync_api import _DEFAULT_OAUTH_TEST_DIR
-        from app.workflows.assistant_skills import _GMAIL_OAUTH_TEST_DIR
+        from app.providers.google_auth import GoogleCredentialError
 
-        self.assertEqual(_GMAIL_OAUTH_TEST_DIR, _DEFAULT_OAUTH_TEST_DIR)
-
-    def test_read_email_returns_no_token_message_when_credentials_are_missing(self) -> None:
-        missing_path = os.path.join(self.temp_dir.name, "does-not-exist.json")
-        with unittest.mock.patch.dict(os.environ, {"GOOGLE_TOKEN_FILE": missing_path}):
+        with unittest.mock.patch(
+            "app.providers.google_auth.build_authorized_session_for_user",
+            side_effect=GoogleCredentialError("연결된 Google 계정이 없습니다: user-a"),
+        ):
             result = asyncio.run(read_email_workflow(_request("read_email", {"message_id": "msg-1"})))
         self.assertFalse(result.mock)
         self.assertEqual(result.data["type"], "email_content")
         self.assertFalse(result.data["data"]["available"])
-        self.assertIn("인증", result.data["data"]["reason"])
+        self.assertIn("Google 계정", result.data["data"]["reason"])
 
     def test_read_email_fetches_the_live_body_when_credentials_are_present(self) -> None:
-        token_path = os.path.join(self.temp_dir.name, "token.json")
-        with open(token_path, "w", encoding="utf-8") as handle:
-            handle.write("{}")
         message = GmailMessage("msg-1", "thread-1", "짧은 미리보기", (), "시즌 패스 보상 지급 로직 변경")
-        with unittest.mock.patch.dict(os.environ, {"GOOGLE_TOKEN_FILE": token_path}), unittest.mock.patch(
-            "app.providers.google_auth.build_authorized_session", return_value=object()
-        ), unittest.mock.patch(
+        with unittest.mock.patch(
+            "app.providers.google_auth.build_authorized_session_for_user", return_value=object()
+        ) as build_session, unittest.mock.patch(
             "app.providers.google.GmailAdapter.get_message_with_body",
             return_value=(message, "본문: v1.4.0 변경 내용을 클라이언트 연동에 반영해야 합니다."),
         ):
-            result = asyncio.run(read_email_workflow(_request("read_email", {"message_id": "msg-1"})))
+            result = asyncio.run(read_email_workflow(_request("read_email", {"message_id": "msg-1"}, user_id="user-a")))
         self.assertFalse(result.mock)
         self.assertEqual(result.data["type"], "email_content")
         self.assertTrue(result.data["data"]["available"])
         self.assertEqual(result.data["data"]["subject"], "시즌 패스 보상 지급 로직 변경")
         self.assertIn("v1.4.0 변경 내용을 클라이언트 연동에 반영해야 합니다", result.data["data"]["body"])
+        # 자기 자신(user-a)의 메일함을 조회했는지 확인 — 다른 사람 계정으로 새지 않았는지.
+        build_session.assert_called_once_with("user-a", ["https://www.googleapis.com/auth/gmail.readonly"])
 
     def test_read_email_strips_the_action_item_index_suffix_from_a_proposal_source_id(self) -> None:
         """실사용 중 발견한 버그(2026-08-17)의 회귀 테스트 — Context.proposals의
@@ -246,12 +239,9 @@ class AssistantSkillsTests(unittest.TestCase):
         id value" 400을 냈다. `:index` 접미사를 잘라내고 순수 Gmail Message
         ID로 호출하는지 확인한다."""
 
-        token_path = os.path.join(self.temp_dir.name, "token.json")
-        with open(token_path, "w", encoding="utf-8") as handle:
-            handle.write("{}")
         message = GmailMessage("1a00ec3a449ec13e", "thread-1", "짧은 미리보기", (), "시즌 패스 보상 지급 로직 변경")
-        with unittest.mock.patch.dict(os.environ, {"GOOGLE_TOKEN_FILE": token_path}), unittest.mock.patch(
-            "app.providers.google_auth.build_authorized_session", return_value=object()
+        with unittest.mock.patch(
+            "app.providers.google_auth.build_authorized_session_for_user", return_value=object()
         ), unittest.mock.patch(
             "app.providers.google.GmailAdapter.get_message_with_body", return_value=(message, "본문")
         ) as get_with_body:
@@ -270,13 +260,10 @@ class AssistantSkillsTests(unittest.TestCase):
         찾아 읽을 수 있어야 한다. 단, 검색 범위는 최근 30일로 제한하고 그
         사실을 결과에 항상 실어야 한다."""
 
-        token_path = os.path.join(self.temp_dir.name, "token.json")
-        with open(token_path, "w", encoding="utf-8") as handle:
-            handle.write("{}")
         found = GmailMessage("msg-found", "thread-1", "짧은 미리보기", ())
         message = GmailMessage("msg-found", "thread-1", "짧은 미리보기", (), "시즌 패스 보상 지급 로직 변경")
-        with unittest.mock.patch.dict(os.environ, {"GOOGLE_TOKEN_FILE": token_path}), unittest.mock.patch(
-            "app.providers.google_auth.build_authorized_session", return_value=object()
+        with unittest.mock.patch(
+            "app.providers.google_auth.build_authorized_session_for_user", return_value=object()
         ), unittest.mock.patch(
             "app.providers.google.GmailAdapter.list_messages", return_value=[found]
         ) as list_messages, unittest.mock.patch(
@@ -298,13 +285,10 @@ class AssistantSkillsTests(unittest.TestCase):
         provider 요청 실패"로만 답했다. 두 문자를 검색어에서 제거하는지
         확인한다."""
 
-        token_path = os.path.join(self.temp_dir.name, "token.json")
-        with open(token_path, "w", encoding="utf-8") as handle:
-            handle.write("{}")
         found = GmailMessage("msg-found", "thread-1", "짧은 미리보기", ())
         message = GmailMessage("msg-found", "thread-1", "짧은 미리보기", (), "시즌 패스")
-        with unittest.mock.patch.dict(os.environ, {"GOOGLE_TOKEN_FILE": token_path}), unittest.mock.patch(
-            "app.providers.google_auth.build_authorized_session", return_value=object()
+        with unittest.mock.patch(
+            "app.providers.google_auth.build_authorized_session_for_user", return_value=object()
         ), unittest.mock.patch(
             "app.providers.google.GmailAdapter.list_messages", return_value=[found]
         ) as list_messages, unittest.mock.patch(
@@ -315,11 +299,8 @@ class AssistantSkillsTests(unittest.TestCase):
         list_messages.assert_called_once_with(query="제목   시즌 패스 newer_than:30d", max_results=5)
 
     def test_read_email_query_search_reports_when_nothing_is_found_within_30_days(self) -> None:
-        token_path = os.path.join(self.temp_dir.name, "token.json")
-        with open(token_path, "w", encoding="utf-8") as handle:
-            handle.write("{}")
-        with unittest.mock.patch.dict(os.environ, {"GOOGLE_TOKEN_FILE": token_path}), unittest.mock.patch(
-            "app.providers.google_auth.build_authorized_session", return_value=object()
+        with unittest.mock.patch(
+            "app.providers.google_auth.build_authorized_session_for_user", return_value=object()
         ), unittest.mock.patch("app.providers.google.GmailAdapter.list_messages", return_value=[]):
             result = asyncio.run(read_email_workflow(_request("read_email", {"query": "존재하지 않는 메일"})))
 

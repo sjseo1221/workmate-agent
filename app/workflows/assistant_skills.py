@@ -14,21 +14,19 @@ Workflow를 공유한다.
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from app.workflows.registry import WorkflowRequest, WorkflowResult
 
-# `app/dev_gmail_sync_api.py`와 같은 기본 경로·환경 변수를 쓴다 — 별도
-# 저장소를 새로 만들지 않고 이미 `google-oauth-test`가 만들어 둔 Token을
-# 그대로 재사용한다. `WORKMATE_DEV_GMAIL_SYNC_ENABLED` 뒤에 두지 않는다 —
-# 그 플래그는 "제안함으로 새 메일을 발행하는 개발용 동기화"를 막는 스위치일
-# 뿐, 이미 Context에 나온 메일 하나를 다시 읽어 답하는 것과는 무관하다.
-_GMAIL_CLIENT_SECRET_FILE_ENV = "GOOGLE_CLIENT_SECRET_FILE"
-_GMAIL_TOKEN_FILE_ENV = "GOOGLE_TOKEN_FILE"
-_GMAIL_OAUTH_TEST_DIR = Path(__file__).resolve().parents[3] / "google-oauth-test"
+# 2026-08-20 변경: 예전엔 `app/dev_gmail_sync_api.py`와 같은 공유 Token 파일
+# (`GOOGLE_TOKEN_FILE`, 모두가 같은 데모 계정을 봄) 하나를 재사용했다 — 원래
+# 의도("각자 자기 메일함을 검색")와 안 맞았고, 컨테이너에서는 그 파일의 기본
+# 경로 계산 자체도 깨져 있었다(`docs/25` 참고). 이제 "Google 계정 연결"
+# 버튼(`app/google_oauth_web.py`)이 쓰는 사용자별 DB Credential
+# (`app/repositories/google_credentials.py`)을 그대로 재사용한다 —
+# `request.user_id`로 조회하므로 로그인한 사람 자신의 메일함을 본다. 별도
+# 파일 경로 설정이나 볼륨 마운트가 필요 없다.
 _GMAIL_READ_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 _EMAIL_BODY_CHAR_LIMIT = 4000
 
@@ -83,10 +81,14 @@ async def read_email_workflow(request: WorkflowRequest) -> WorkflowResult:
       무제한 검색하면 응답이 느려지고 예상 밖의 오래된 메일을 잘못 골라올
       위험이 있다. 이 제한은 결과의 `search_window_note`에 항상 실어, 사용자가
       "그 전 메일이라 못 찾았을 수 있다"는 걸 답에서 알 수 있게 한다.
+
+    `request.user_id`로 연결된 Google 계정(제안함 화면의 "Google 계정 연결")을
+    쓴다 — 연결 안 돼 있으면 그렇게 안내하고, 다른 사람의 메일함을 보는 일은
+    없다(2026-08-20, 원래 의도대로 사용자별로 분리).
     """
 
     from app.providers.google import GmailAdapter, GoogleProviderError
-    from app.providers.google_auth import GoogleCredentialError, build_authorized_session
+    from app.providers.google_auth import GoogleCredentialError, build_authorized_session_for_user
 
     message_id = request.payload.get("message_id")
     if message_id:
@@ -102,11 +104,6 @@ async def read_email_workflow(request: WorkflowRequest) -> WorkflowResult:
     query = request.payload.get("query")
     if not message_id and not query:
         raise ValueError("message_id or query is required")
-
-    def _credential_paths() -> tuple[Path, Path]:
-        secret = Path(os.getenv(_GMAIL_CLIENT_SECRET_FILE_ENV, str(_GMAIL_OAUTH_TEST_DIR / "client_secret.json")))
-        token = Path(os.getenv(_GMAIL_TOKEN_FILE_ENV, str(_GMAIL_OAUTH_TEST_DIR / "token.json")))
-        return secret, token
 
     def _unavailable(reason: str, *, searched_by_query: bool) -> WorkflowResult:
         data = {
@@ -129,12 +126,16 @@ async def read_email_workflow(request: WorkflowRequest) -> WorkflowResult:
         )
 
     searched_by_query = message_id is None
-    _secret_path, token_path = _credential_paths()
-    if not token_path.exists():
-        return _unavailable("Gmail 인증이 안 되어 있어 메일 내용을 다시 가져올 수 없습니다.", searched_by_query=searched_by_query)
+    try:
+        session = build_authorized_session_for_user(request.user_id, _GMAIL_READ_SCOPES)
+    except GoogleCredentialError:
+        return _unavailable(
+            "Google 계정이 연결돼 있지 않아 메일 내용을 가져올 수 없습니다. \"제안함\" 화면에서 "
+            "\"Google 계정 연결\"로 먼저 연동해주세요.",
+            searched_by_query=searched_by_query,
+        )
 
     try:
-        session = build_authorized_session(token_path, _GMAIL_READ_SCOPES)
         adapter = GmailAdapter(session)
         if searched_by_query:
             gmail_query = f"{_sanitize_gmail_query_text(str(query))} newer_than:{_EMAIL_SEARCH_WINDOW_DAYS}d"
