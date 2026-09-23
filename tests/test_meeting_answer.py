@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 from uuid import uuid4
+from unittest.mock import patch
 
 from app.meeting_answer import MeetingAnswerService
 from app.repositories.meeting_chunks import HybridSearchHit
@@ -42,6 +43,14 @@ class MeetingAnswerTests(unittest.TestCase):
         self.assertEqual(result.sources, ())
         self.assertTrue(result.warnings)
         self.assertIn("부족", result.answer)
+
+    def test_llm_summary_is_returned_while_exact_sources_are_preserved(self) -> None:
+        with patch("app.meeting_answer._summarize_with_llm", return_value="핵심 결정은 2주년 혜택을 확대하는 것입니다."):
+            result = MeetingAnswerService().answer_from_hits("2주년 핵심", [hit(score=0.02, content="2주년 혜택을 확대한다.")])
+
+        self.assertEqual(result.answer, "핵심 결정은 2주년 혜택을 확대하는 것입니다.")
+        self.assertEqual(result.sources[0].evidence_text, "2주년 혜택을 확대한다.")
+        self.assertEqual(result.warnings, ())
 
     def test_empty_query_is_rejected(self) -> None:
         with self.assertRaises(ValueError):

@@ -444,10 +444,10 @@ def build_search_meetings_workflow(
         }
         warnings = [
             {
-                "source": "meeting",
-                "code": "INSUFFICIENT_EVIDENCE",
+                "source": "meeting" if not answer.grounded else "llm",
+                "code": "INSUFFICIENT_EVIDENCE" if not answer.grounded else "LLM_PROVIDER_UNAVAILABLE",
                 "message": warning,
-                "retryable": False,
+                "retryable": answer.grounded,
                 "last_success_at": None,
             }
             for warning in answer.warnings
