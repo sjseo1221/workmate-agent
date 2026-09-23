@@ -429,7 +429,14 @@ def _default_proposals_context(user_id: str, *, limit: int = _DEFAULT_CONTEXT_LI
     recent = proposal_hub.recent(user_id, limit=limit)
     items: list[dict[str, Any]] = []
     for proposal in recent:
-        item: dict[str, Any] = {"source_type": proposal.source_type, "title": proposal.title}
+        # `AssistantAskContextProposal`(workmate-skill-schemas.schema.json)은 `proposal_id`가
+        # required다 — 이전엔 여기서 빠뜨려 이 폴백 경로만 그 계약을 어겼다(99번 문서 32번 항목,
+        # 2026-08-24 정정).
+        item: dict[str, Any] = {
+            "proposal_id": proposal.proposal_id,
+            "source_type": proposal.source_type,
+            "title": proposal.title,
+        }
         if proposal.due_at is not None:
             item["due_at"] = proposal.due_at.isoformat()
         if proposal.source_type == "email":

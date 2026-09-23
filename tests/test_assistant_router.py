@@ -926,7 +926,8 @@ class _FakeMeeting:
 
 
 class _FakeProposal:
-    def __init__(self, source_type, source_id, title, due_at=None, metadata=None) -> None:
+    def __init__(self, source_type, source_id, title, due_at=None, metadata=None, proposal_id=None) -> None:
+        self.proposal_id = proposal_id or f"{source_type}-{source_id}"
         self.source_type = source_type
         self.source_id = source_id
         self.title = title
@@ -961,10 +962,14 @@ class DefaultContextTests(unittest.TestCase):
         with patch("app.proposal_api.proposal_hub.recent", return_value=proposals) as fake_recent:
             result = assistant_router._default_proposals_context("user-a")
         fake_recent.assert_called_once_with("user-a", limit=10)
-        self.assertEqual(result[0], {"source_type": "email", "title": "메일 제안", "message_id": "msg-1"})
+        self.assertEqual(
+            result[0],
+            {"proposal_id": "email-msg-1", "source_type": "email", "title": "메일 제안", "message_id": "msg-1"},
+        )
         self.assertEqual(
             result[1],
             {
+                "proposal_id": "calendar-cal-1:evt-1",
                 "source_type": "calendar", "title": "일정 제안",
                 "due_at": "2026-08-20T09:00:00+00:00",
                 "calendar_id": "cal-1", "event_id": "evt-1",
